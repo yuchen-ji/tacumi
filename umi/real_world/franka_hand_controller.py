@@ -28,7 +28,7 @@ class FrankaHandController(mp.Process):
         self,
         shm_manager: SharedMemoryManager,
         hostname: str,
-        port: int = 4243,
+        port: int = 4242,
         frequency: float = 30.0,
         home_on_start: bool = True,
         move_max_speed: float = 0.1,
@@ -150,13 +150,18 @@ class FrankaHandController(mp.Process):
     # ========= main loop in process ============
     def run(self):
         try:
-            with FrankaHandDriver(hostname=self.hostname, port=self.port) as gripper:
+            with FrankaHandDriver(
+                hostname=self.hostname, 
+                port=self.port) as gripper:
+                
                 if self.verbose:
                     print(f"[FrankaHandController] Connect to gripper: {self.hostname}:{self.port}")
 
+                # home gripper to initialize
                 if self.home_on_start:
                     gripper.homing()
 
+                # get initial
                 info = gripper.get_state()
                 curr_pos = float(info.get("width", 0.0)) / self.scale
                 curr_t = time.monotonic()
@@ -170,11 +175,16 @@ class FrankaHandController(mp.Process):
                 t_start = time.monotonic()
                 iter_idx = 0
                 while keep_running:
+                    # command gripper
                     t_now = time.monotonic()
                     dt = 1.0 / self.frequency
                     t_target = t_now
                     target_pos = pose_interp(t_target)[0]
                     target_vel = (target_pos - pose_interp(t_target - dt)[0]) / dt
+
+                    # NOTE: 这里原先WSG夹具的接口的指令如下
+                    # info = wsg.script_position_pd(
+                    #     position=target_pos, velocity=target_vel)
 
                     speed = min(self.move_max_speed, abs(target_vel))
                     gripper.goto(
@@ -182,27 +192,32 @@ class FrankaHandController(mp.Process):
                         speed=speed,
                         force=self.move_force,
                     )
-
+                    
+                    # TODO: 需要确认这里的代码，get_state能不能返回正确的值？
                     info = gripper.get_state() or {}
                     state = {
-                        "gripper_state": int(bool(info.get("is_grasped", False))),
-                        "gripper_position": float(info.get("width", 0.0)) / self.scale,
-                        "gripper_velocity": float(info.get("velocity", 0.0)) / self.scale,
-                        "gripper_force": float(info.get("force", 0.0)),
-                        "gripper_measure_timestamp": info.get("timestamp", time.time()),
+                        "gripper_state": info['is_grasped'],    # TODO: 这个gripper_state表示什么意思呢？
+                        "gripper_position": info["width"] / self.scale,
+                        "gripper_velocity": 0.0/self.scale,   # TODO: 能否获得速度反馈信号？
+                        "gripper_force": 0.0,   # TODO: 能否获得力反馈信号？
+                        "gripper_measure_timestamp": info['timestamp'],
                         "gripper_receive_timestamp": time.time(),
                         "gripper_timestamp": time.time() - self.receive_latency,
                     }
                     self.ring_buffer.put(state)
 
+                    # fetch command from queue
                     try:
                         commands = self.input_queue.get_all()
                         n_cmd = len(commands["cmd"])
                     except Empty:
                         n_cmd = 0
 
+                    # execute commands
                     for i in range(n_cmd):
-                        command = {key: value[i] for key, value in commands.items()}
+                        command = dict()
+                        for key, value in commands.items():
+                            command[key] = value[i]
                         cmd = command["cmd"]
 
                         if cmd == Command.SHUTDOWN.value:
@@ -229,12 +244,15 @@ class FrankaHandController(mp.Process):
                             keep_running = False
                             break
 
+                    # first loop successful, ready to receive command
                     if iter_idx == 0:
                         self.ready_event.set()
                     iter_idx += 1
 
-                    t_end = t_start + (1.0 / self.frequency) * iter_idx
+                    dt = 1.0 / self.frequency
+                    t_end = t_start + dt * iter_idx
                     precise_wait(t_end=t_end, time_func=time.monotonic)
+
         finally:
             self.ready_event.set()
             if self.verbose:

@@ -51,7 +51,7 @@ class FrankaGripperInterface:
 
 def main():
     server = zerorpc.Server(FrankaGripperInterface())
-    server.bind("tcp://0.0.0.0:4243")
+    server.bind("tcp://0.0.0.0:4242")
     server.run()
 
 

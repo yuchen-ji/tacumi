@@ -6,7 +6,7 @@ import shutil
 import math
 from multiprocessing.managers import SharedMemoryManager
 from umi.real_world.rtde_interpolation_controller import RTDEInterpolationController
-from umi.real_world.wsg_controller import WSGController
+# from umi.real_world.wsg_controller import WSGController
 from umi.real_world.franka_interpolation_controller import FrankaInterpolationController
 from umi.real_world.multi_uvc_camera import MultiUvcCamera, VideoRecorder
 from diffusion_policy.common.timestamp_accumulator import (
@@ -21,6 +21,8 @@ from diffusion_policy.common.cv2_util import (
 from umi.common.usb_util import reset_all_elgato_devices, get_sorted_v4l_paths
 from umi.common.pose_util import pose_to_pos_rot
 from umi.common.interpolation_util import get_interp1d, PoseInterpolator
+
+from umi.real_world.franka_hand_controller import FrankaHandController
 
 
 class BimanualUmiEnv:
@@ -207,7 +209,8 @@ class BimanualUmiEnv:
 
         assert len(robots_config) == len(grippers_config)
         robots: List[RTDEInterpolationController] = list()
-        grippers: List[WSGController] = list()
+        # grippers: List[WSGController] = list()
+        grippers: List[FrankaHandController] = list()
         for rc in robots_config:
             if rc['robot_type'].startswith('ur5'):
                 assert rc['robot_type'] in ['ur5', 'ur5e']
@@ -246,7 +249,14 @@ class BimanualUmiEnv:
             robots.append(this_robot)
 
         for gc in grippers_config:
-            this_gripper = WSGController(
+            # this_gripper = WSGController(
+            #     shm_manager=shm_manager,
+            #     hostname=gc['gripper_ip'],
+            #     port=gc['gripper_port'],
+            #     receive_latency=gc['gripper_obs_latency'],
+            #     use_meters=True
+            # )
+            this_gripper = FrankaHandController(
                 shm_manager=shm_manager,
                 hostname=gc['gripper_ip'],
                 port=gc['gripper_port'],
@@ -262,6 +272,9 @@ class BimanualUmiEnv:
         self.robots_config = robots_config
         self.grippers = grippers
         self.grippers_config = grippers_config
+        # Track last commanded gripper state and the last requested width to infer intent.
+        self._last_gripper_state = [None] * len(self.grippers)
+        self._last_gripper_cmd_width = [None] * len(self.grippers)
 
         self.multi_cam_vis = multi_cam_vis
         self.frequency = frequency
@@ -511,10 +524,50 @@ class BimanualUmiEnv:
                     pose=r_actions,
                     target_time=new_timestamps[i] - r_latency
                 )
-                gripper.schedule_waypoint(
-                    pos=g_actions,
-                    target_time=new_timestamps[i] - g_latency
-                )
+                # NOTE: 这里是先前的gripper控制代码
+                # gripper.schedule_waypoint(
+                #     pos=g_actions,
+                #     target_time=new_timestamps[i] - g_latency
+                # )
+
+                # Interpret g_actions as desired width; send open/close once per intent change.
+                open_width = 0.078
+                close_width = 0.0
+                # Deadband on commanded width change to avoid noise-triggered flips.
+                width_deadband = 0.01   # 移动1cm才认为是夹具的意图改变
+
+                last_state = self._last_gripper_state[robot_idx]
+                last_cmd_width = self._last_gripper_cmd_width[robot_idx]
+
+                # Initialize state on first command based on midpoint.
+                if last_state is None:
+                    desired_state = 'open' if g_actions >= (open_width + close_width) * 0.5 else 'close'
+                    target_pos = open_width if desired_state == 'open' else close_width
+                    gripper.schedule_waypoint(
+                        pos=target_pos,
+                        target_time=new_timestamps[i] - g_latency
+                    )
+                    self._last_gripper_state[robot_idx] = desired_state
+                    self._last_gripper_cmd_width[robot_idx] = g_actions
+                    continue
+
+                delta_width = g_actions - (last_cmd_width if last_cmd_width is not None else g_actions)
+                if abs(delta_width) >= width_deadband:
+                    # 如果是正数，表明是打开夹具；如果是负数，表明是关闭夹具。
+                    desired_state = 'open' if delta_width > 0 else 'close'
+                    # 只有状态发生改变时，才会发送指令
+                    if desired_state != last_state:
+                        target_pos = open_width if desired_state == 'open' else close_width
+                        gripper.schedule_waypoint(
+                            pos=target_pos,
+                            target_time=new_timestamps[i] - g_latency
+                        )
+                        # 更新夹具的状态
+                        self._last_gripper_state[robot_idx] = desired_state
+                    # 无论有没有状态改变，都会更新夹具的宽度值，以便下一次计算delta_width
+                    # 只有当gripper_width的改变超过阈值时，才会更新last_gripper_cmd_width
+                    # 因为，每次policy推理时，gripper_width的变化很小。如果每次都更新，则很难达到阈值的。
+                    self._last_gripper_cmd_width[robot_idx] = g_actions
 
         # record actions
         if self.action_accumulator is not None:
@@ -535,6 +588,9 @@ class BimanualUmiEnv:
         if start_time is None:
             start_time = time.time()
         self.start_time = start_time
+        # Reset gripper state tracking at the beginning of each episode.
+        self._last_gripper_state = [None] * len(self.grippers)
+        self._last_gripper_cmd_width = [None] * len(self.grippers)
 
         assert self.is_ready
 

@@ -279,6 +279,8 @@ class RTDEInterpolationController(mp.Process):
                     self.gain)
                 
                 # update robot state
+                # 对于UR机器人，可以直接通过RTDE获取机器人状态 
+                # 而不需要通过类似Franka的client--server(fairo)的形式获取
                 state = dict()
                 for key in self.receive_keys:
                     state[key] = np.array(getattr(rtde_r, 'get'+key)())

@@ -21,17 +21,30 @@ class Command(enum.Enum):
     SERVOL = 1
     SCHEDULE_WAYPOINT = 2
 
-tx_flangerot90_tip = np.identity(4)
-tx_flangerot90_tip[:3, 3] = np.array([-0.0336, 0, 0.247])
 
-tx_flangerot45_flangerot90 = np.identity(4)
-tx_flangerot45_flangerot90[:3,:3] = st.Rotation.from_euler('x', [np.pi/2]).as_matrix()
+# # tx_{A}_{B} 表示 {B} in {A}
+# tx_flangerot90_tip = np.identity(4)
+# tx_flangerot90_tip[:3, 3] = np.array([-0.0336, 0, 0.247])
 
-tx_flange_flangerot45 = np.identity(4)
-tx_flange_flangerot45[:3,:3] = st.Rotation.from_euler('z', [np.pi/4]).as_matrix()
+# tx_flangerot45_flangerot90 = np.identity(4)
+# tx_flangerot45_flangerot90[:3,:3] = st.Rotation.from_euler('x', [np.pi/2]).as_matrix()
 
-tx_flange_tip = tx_flange_flangerot45 @ tx_flangerot45_flangerot90 @tx_flangerot90_tip
+# tx_flange_flangerot45 = np.identity(4)
+# tx_flange_flangerot45[:3,:3] = st.Rotation.from_euler('z', [np.pi/4]).as_matrix()
+
+# tx_flange_tip = tx_flange_flangerot45 @ tx_flangerot45_flangerot90 @ tx_flangerot90_tip
+# tx_tip_flange = np.linalg.inv(tx_flange_tip)
+
+
+
+# 下面这里是对于franka-umi的设定
+# # tx_{A}_{B} 表示 {B} in {A}
+tx_flange_tip = np.identity(4)
+# TODO: 这里为什么会是+45度呢？
+tx_flange_tip[:3, :3] = st.Rotation.from_euler('z', [np.pi/4]).as_matrix()
+tx_flange_tip[:3, 3] = np.array([0, 0, 0.2045])
 tx_tip_flange = np.linalg.inv(tx_flange_tip)
+
 
 # 这里可以看到，FrankaInterface的函数和scripts_real/launch_franka_interface_server.py中的FrankaInterface是一一对应的
 # 这里的FrankaInterface会调用franka服务器上的函数
@@ -42,6 +55,9 @@ class FrankaInterface:
 
     def get_ee_pose(self):
         flange_pose = np.array(self.server.get_ee_pose())
+        # 已知： 
+        # 1.flange2base  2.tip2flange
+        # ==> tip2base = flange2base @ tip2flange
         tip_pose = mat_to_pose(pose_to_mat(flange_pose) @ tx_flange_tip)
         return tip_pose
     
@@ -292,6 +308,8 @@ class FrankaInterpolationController(mp.Process):
                 # print(flange_pose)
                 robot.update_desired_ee_pose(flange_pose)
 
+                # NOTE: 这里获取机器人的状态并更新到ring buffer中
+                # func_name与franka_server/fairo中的FrankaInterface中的函数一一对应
                 # update robot state
                 state = dict()
                 for key, func_name in self.receive_keys:
