@@ -55,6 +55,9 @@ class BimanualUmiEnv:
             # action
             max_pos_speed=0.25,
             max_rot_speed=0.6,
+            gripper_command_frequency=5.0,
+            gripper_command_min_delta=0.002,
+            gripper_command_max_interval=0.5,
             init_joints=False,
             # vis params
             enable_multi_cam_vis=True,
@@ -272,8 +275,12 @@ class BimanualUmiEnv:
         self.robots_config = robots_config
         self.grippers = grippers
         self.grippers_config = grippers_config
-        # Track last commanded gripper state and the last requested width to infer intent.
-        self._last_gripper_state = [None] * len(self.grippers)
+        # Track last gripper command timing/width for rate limiting.
+        self.gripper_command_frequency = gripper_command_frequency
+        self.gripper_command_period = 1.0 / max(gripper_command_frequency, 1e-6)
+        self.gripper_command_min_delta = gripper_command_min_delta
+        self.gripper_command_max_interval = gripper_command_max_interval
+        self._last_gripper_cmd_time = [None] * len(self.grippers)
         self._last_gripper_cmd_width = [None] * len(self.grippers)
 
         self.multi_cam_vis = multi_cam_vis
@@ -524,50 +531,67 @@ class BimanualUmiEnv:
                     pose=r_actions,
                     target_time=new_timestamps[i] - r_latency
                 )
-                # NOTE: 这里是先前的gripper控制代码
-                # gripper.schedule_waypoint(
-                #     pos=g_actions,
-                #     target_time=new_timestamps[i] - g_latency
-                # )
-
-                # Interpret g_actions as desired width; send open/close once per intent change.
-                open_width = 0.078
-                close_width = 0.0
-                # Deadband on commanded width change to avoid noise-triggered flips.
-                width_deadband = 0.01   # 移动1cm才认为是夹具的意图改变
-
-                last_state = self._last_gripper_state[robot_idx]
+                # NOTE: 夹具控制与机械臂解耦：限频 + 最小变化阈值 + 最长刷新间隔
+                g_target_time = new_timestamps[i] - g_latency
+                last_cmd_time = self._last_gripper_cmd_time[robot_idx]
                 last_cmd_width = self._last_gripper_cmd_width[robot_idx]
 
-                # Initialize state on first command based on midpoint.
-                if last_state is None:
-                    desired_state = 'open' if g_actions >= (open_width + close_width) * 0.5 else 'close'
-                    target_pos = open_width if desired_state == 'open' else close_width
-                    gripper.schedule_waypoint(
-                        pos=target_pos,
-                        target_time=new_timestamps[i] - g_latency
-                    )
-                    self._last_gripper_state[robot_idx] = desired_state
-                    self._last_gripper_cmd_width[robot_idx] = g_actions
+                if last_cmd_time is not None and g_target_time <= last_cmd_time:
                     continue
 
-                delta_width = g_actions - (last_cmd_width if last_cmd_width is not None else g_actions)
-                if abs(delta_width) >= width_deadband:
-                    # 如果是正数，表明是打开夹具；如果是负数，表明是关闭夹具。
-                    desired_state = 'open' if delta_width > 0 else 'close'
-                    # 只有状态发生改变时，才会发送指令
-                    if desired_state != last_state:
-                        target_pos = open_width if desired_state == 'open' else close_width
-                        gripper.schedule_waypoint(
-                            pos=target_pos,
-                            target_time=new_timestamps[i] - g_latency
-                        )
-                        # 更新夹具的状态
-                        self._last_gripper_state[robot_idx] = desired_state
-                    # 无论有没有状态改变，都会更新夹具的宽度值，以便下一次计算delta_width
-                    # 只有当gripper_width的改变超过阈值时，才会更新last_gripper_cmd_width
-                    # 因为，每次policy推理时，gripper_width的变化很小。如果每次都更新，则很难达到阈值的。
+                is_first = (last_cmd_time is None)
+                enough_time = is_first or ((g_target_time - last_cmd_time) >= self.gripper_command_period)
+                enough_delta = is_first or (last_cmd_width is None) or (
+                    abs(g_actions - last_cmd_width) >= self.gripper_command_min_delta)
+                force_refresh = is_first or ((last_cmd_time is not None) and (
+                    (g_target_time - last_cmd_time) >= self.gripper_command_max_interval))
+
+                if (enough_time and enough_delta) or force_refresh:
+                    gripper.schedule_waypoint(
+                        pos=g_actions,
+                        target_time=g_target_time
+                    )
+                    self._last_gripper_cmd_time[robot_idx] = g_target_time
                     self._last_gripper_cmd_width[robot_idx] = g_actions
+
+                # # Interpret g_actions as desired width; send open/close once per intent change.
+                # open_width = 0.078
+                # close_width = 0.0
+                # # Deadband on commanded width change to avoid noise-triggered flips.
+                # width_deadband = 0.01   # 移动1cm才认为是夹具的意图改变
+
+                # last_state = self._last_gripper_state[robot_idx]
+                # last_cmd_width = self._last_gripper_cmd_width[robot_idx]
+
+                # # Initialize state on first command based on midpoint.
+                # if last_state is None:
+                #     desired_state = 'open' if g_actions >= (open_width + close_width) * 0.5 else 'close'
+                #     target_pos = open_width if desired_state == 'open' else close_width
+                #     gripper.schedule_waypoint(
+                #         pos=target_pos,
+                #         target_time=new_timestamps[i] - g_latency
+                #     )
+                #     self._last_gripper_state[robot_idx] = desired_state
+                #     self._last_gripper_cmd_width[robot_idx] = g_actions
+                #     continue
+
+                # delta_width = g_actions - (last_cmd_width if last_cmd_width is not None else g_actions)
+                # if abs(delta_width) >= width_deadband:
+                #     # 如果是正数，表明是打开夹具；如果是负数，表明是关闭夹具。
+                #     desired_state = 'open' if delta_width > 0 else 'close'
+                #     # 只有状态发生改变时，才会发送指令
+                #     if desired_state != last_state:
+                #         target_pos = open_width if desired_state == 'open' else close_width
+                #         gripper.schedule_waypoint(
+                #             pos=target_pos,
+                #             target_time=new_timestamps[i] - g_latency
+                #         )
+                #         # 更新夹具的状态
+                #         self._last_gripper_state[robot_idx] = desired_state
+                #     # 无论有没有状态改变，都会更新夹具的宽度值，以便下一次计算delta_width
+                #     # 只有当gripper_width的改变超过阈值时，才会更新last_gripper_cmd_width
+                #     # 因为，每次policy推理时，gripper_width的变化很小。如果每次都更新，则很难达到阈值的。
+                #     self._last_gripper_cmd_width[robot_idx] = g_actions
 
         # record actions
         if self.action_accumulator is not None:
@@ -588,8 +612,8 @@ class BimanualUmiEnv:
         if start_time is None:
             start_time = time.time()
         self.start_time = start_time
-        # Reset gripper state tracking at the beginning of each episode.
-        self._last_gripper_state = [None] * len(self.grippers)
+        # Reset gripper command tracking at the beginning of each episode.
+        self._last_gripper_cmd_time = [None] * len(self.grippers)
         self._last_gripper_cmd_width = [None] * len(self.grippers)
 
         assert self.is_ready

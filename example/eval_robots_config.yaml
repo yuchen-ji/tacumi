@@ -26,7 +26,7 @@
     {
       "robot_type": "franka",
       "robot_ip": "192.168.0.5",
-      "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, "tcp_offset": 0.105,
+      "robot_obs_latency": 0.0001, "robot_action_latency": 0.1, # "tcp_offset": 0.105, 
       "height_threshold": -0.024, # TODO: 这个是相对于谁的坐标系？
       "sphere_radius": 0.1, "sphere_center": [0, -0.06, -0.185]
     }

@@ -108,6 +108,7 @@ def solve_sphere_collision(ee_poses, robots_config):
 @click.command()
 @click.option('--input', '-i', required=True, help='Path to checkpoint')
 @click.option('--output', '-o', required=True, help='Directory to save recording')
+# example/eval_robots_config.yaml
 @click.option('--robot_config', '-rc', required=True, help='Path to robot_config yaml file')
 @click.option('--match_dataset', '-m', default=None, help='Dataset used to overlay and adjust initial condition')
 @click.option('--match_episode', '-me', default=None, type=int, help='Match specific episode from the match dataset')
@@ -275,7 +276,10 @@ def main(input, output, robot_config,
                 # ========= human control loop ==========
                 print("Human in control!")
                 robot_states = env.get_robot_state()
-                target_pose = np.stack([rs['TargetTCPPose'] for rs in robot_states])
+                # NOTE: 这个感觉是获取机器人的当前位置，TargetTCPPose for UR
+                # target_pose = np.stack([rs['TargetTCPPose'] for rs in robot_states])
+                # TODO：这里的TargetTCPPose和ActualTCPPose有哪些区别呢？
+                target_pose = np.stack([rs['ActualTCPPose'] for rs in robot_states])
 
                 # TODO： 这里获取/控制夹爪的指令要不要改变呢？
                 gripper_states = env.get_gripper_state()

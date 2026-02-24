@@ -30,23 +30,17 @@ class FrankaGripperInterface:
     def stop_motion(self):
         return self.gripper.stop()
 
+    # TODO: 确认下这里的state是否正确
     def get_state(self):
-        state = self.gripper.get_state()
+        state_ = self.gripper.get_state()
         # state is a dataclass-like struct; fall back to attrs if missing
-        width = float(getattr(state, "width", 0.0))
-        max_width = float(getattr(state, "max_width", np.nan))
-        is_grasped = bool(getattr(state, "is_grasped", False))
-        velocity = float(getattr(state, "speed", 0.0))
-        force = float(getattr(state, "force", 0.0))
-        timestamp = float(getattr(state, "timestamp", 0.0))
-        return {
-            "width": width,
-            "max_width": max_width,
-            "is_grasped": is_grasped,
-            "velocity": velocity,
-            "force": force,
-            "timestamp": timestamp,
-        }
+        state = dict()
+        state['width'] = state_.width
+        state['is_moving'] = state_.is_moving
+        state['is_grasped'] = state_.is_grasped
+        state['timestamp'] = state_.timestamp.seconds + state_.timestamp.nanos * 1e-9
+        state['prev_command_successful'] = state_.prev_command_successful
+        return state
 
 
 def main():

@@ -198,7 +198,7 @@ class FrankaHandController(mp.Process):
                     state = {
                         "gripper_state": info['is_grasped'],    # TODO: 这个gripper_state表示什么意思呢？
                         "gripper_position": info["width"] / self.scale,
-                        "gripper_velocity": 0.0/self.scale,   # TODO: 能否获得速度反馈信号？
+                        "gripper_velocity": 0.0 / self.scale,   # TODO: 能否获得速度反馈信号？
                         "gripper_force": 0.0,   # TODO: 能否获得力反馈信号？
                         "gripper_measure_timestamp": info['timestamp'],
                         "gripper_receive_timestamp": time.time(),
