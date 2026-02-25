@@ -35,10 +35,10 @@ class FrankaGripperInterface:
         state_ = self.gripper.get_state()
         # state is a dataclass-like struct; fall back to attrs if missing
         state = dict()
+        state['timestamp'] = state_.timestamp.seconds + state_.timestamp.nanos * 1e-9
         state['width'] = state_.width
         state['is_moving'] = state_.is_moving
         state['is_grasped'] = state_.is_grasped
-        state['timestamp'] = state_.timestamp.seconds + state_.timestamp.nanos * 1e-9
         state['prev_command_successful'] = state_.prev_command_successful
         return state
 

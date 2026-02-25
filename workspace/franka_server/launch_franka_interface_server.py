@@ -66,7 +66,7 @@ class FrankaInterface:
 
     # TODO: 这里看一下GripperInface里的blocking参数的作用
     # 能不能实现实时的夹爪控制
-    def goto(self, width, speed, force):
+    def goto(self, width: float, speed: float, force: float):
         self.gripper.goto(
             width=width,
             speed=speed,

@@ -29,10 +29,11 @@ class FrankaHandController(mp.Process):
         shm_manager: SharedMemoryManager,
         hostname: str,
         port: int = 4242,
-        frequency: float = 30.0,
+        # frequency: float = 30.0,
+        frequency: float = 3.0,  # 使用3HZ的频率控制夹爪
         home_on_start: bool = True,
-        move_max_speed: float = 0.1,
-        move_force: Optional[float] = None,
+        move_max_speed: float = 0.2, # m/s
+        move_force: float = 1.0,    # TODO: force参数对franka hand的移动速度有什么影响呢
         get_max_k: Optional[int] = None,
         command_queue_size: int = 1024,
         launch_timeout: float = 3.0,
@@ -163,7 +164,7 @@ class FrankaHandController(mp.Process):
 
                 # get initial
                 info = gripper.get_state()
-                curr_pos = float(info.get("width", 0.0)) / self.scale
+                curr_pos = info["width"] / self.scale
                 curr_t = time.monotonic()
                 last_waypoint_time = curr_t
                 pose_interp = PoseTrajectoryInterpolator(
@@ -187,6 +188,8 @@ class FrankaHandController(mp.Process):
                     #     position=target_pos, velocity=target_vel)
 
                     speed = min(self.move_max_speed, abs(target_vel))
+
+                    # TODO: 如果夹具不懂，可以修改这里的speed，一般改成0.2就比较好了
                     gripper.goto(
                         width=target_pos * self.scale,
                         speed=speed,
@@ -228,6 +231,7 @@ class FrankaHandController(mp.Process):
                             target_time = command["target_time"]
                             target_time = time.monotonic() - time.time() + target_time
                             curr_time = t_now
+                            # 在已有轨迹上安全地插入一个新目标点，并且满足速度上限约束（平移/旋转）。
                             pose_interp = pose_interp.schedule_waypoint(
                                 pose=[target_pos, 0, 0, 0, 0, 0],
                                 time=target_time,

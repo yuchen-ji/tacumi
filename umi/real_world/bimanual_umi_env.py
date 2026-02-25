@@ -55,8 +55,9 @@ class BimanualUmiEnv:
             # action
             max_pos_speed=0.25,
             max_rot_speed=0.6,
-            gripper_command_frequency=5.0,
-            gripper_command_min_delta=0.002,
+            # NOTE: 用于控制夹具的频率
+            gripper_command_frequency=3.0,
+            gripper_command_min_delta=0.005,    # 最小的移动距离
             gripper_command_max_interval=0.5,
             init_joints=False,
             # vis params
@@ -278,10 +279,10 @@ class BimanualUmiEnv:
         # Track last gripper command timing/width for rate limiting.
         self.gripper_command_frequency = gripper_command_frequency
         self.gripper_command_period = 1.0 / max(gripper_command_frequency, 1e-6)
-        self.gripper_command_min_delta = gripper_command_min_delta
-        self.gripper_command_max_interval = gripper_command_max_interval
         self._last_gripper_cmd_time = [None] * len(self.grippers)
-        self._last_gripper_cmd_width = [None] * len(self.grippers)
+        # self.gripper_command_min_delta = gripper_command_min_delta
+        # self.gripper_command_max_interval = gripper_command_max_interval
+        # self._last_gripper_cmd_width = [None] * len(self.grippers)
 
         self.multi_cam_vis = multi_cam_vis
         self.frequency = frequency
@@ -531,32 +532,45 @@ class BimanualUmiEnv:
                     pose=r_actions,
                     target_time=new_timestamps[i] - r_latency
                 )
-                # NOTE: 夹具控制与机械臂解耦：限频 + 最小变化阈值 + 最长刷新间隔
+
+                ### =============================================================================
+                ### 0. 原始代码，和机器人关节的控制频率一样
+                ### =============================================================================
+                # gripper.schedule_waypoint(
+                #     pos=g_actions,
+                #     target_time=new_timestamps[i] - r_latency
+                # )
+
+
+                ### =============================================================================
+                ### 1. 使用较低的夹爪控制频率
+                ### =============================================================================
+
+                # NOTE: 夹具控制与机械臂解耦：仅按指令间时间间隔限频
                 g_target_time = new_timestamps[i] - g_latency
                 last_cmd_time = self._last_gripper_cmd_time[robot_idx]
-                last_cmd_width = self._last_gripper_cmd_width[robot_idx]
 
                 if last_cmd_time is not None and g_target_time <= last_cmd_time:
                     continue
 
                 is_first = (last_cmd_time is None)
                 enough_time = is_first or ((g_target_time - last_cmd_time) >= self.gripper_command_period)
-                enough_delta = is_first or (last_cmd_width is None) or (
-                    abs(g_actions - last_cmd_width) >= self.gripper_command_min_delta)
-                force_refresh = is_first or ((last_cmd_time is not None) and (
-                    (g_target_time - last_cmd_time) >= self.gripper_command_max_interval))
 
-                if (enough_time and enough_delta) or force_refresh:
+                if enough_time:
                     gripper.schedule_waypoint(
                         pos=g_actions,
                         target_time=g_target_time
                     )
                     self._last_gripper_cmd_time[robot_idx] = g_target_time
-                    self._last_gripper_cmd_width[robot_idx] = g_actions
 
+
+                ### =============================================================================
+                ### 2. Open/Close二值化的夹具控制策略
+                ### 根据夹具的移动倾向来判断是打开还是关闭夹具，效果不太好
+                ### =============================================================================
                 # # Interpret g_actions as desired width; send open/close once per intent change.
-                # open_width = 0.078
-                # close_width = 0.0
+                # open_width = 0.0745
+                # close_width = 0.03
                 # # Deadband on commanded width change to avoid noise-triggered flips.
                 # width_deadband = 0.01   # 移动1cm才认为是夹具的意图改变
 
@@ -614,7 +628,7 @@ class BimanualUmiEnv:
         self.start_time = start_time
         # Reset gripper command tracking at the beginning of each episode.
         self._last_gripper_cmd_time = [None] * len(self.grippers)
-        self._last_gripper_cmd_width = [None] * len(self.grippers)
+        # self._last_gripper_cmd_width = [None] * len(self.grippers)
 
         assert self.is_ready
 
