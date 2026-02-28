@@ -190,6 +190,8 @@ class FrankaHandController(mp.Process):
                     speed = min(self.move_max_speed, abs(target_vel))
 
                     # TODO: 如果夹具不懂，可以修改这里的speed，一般改成0.2就比较好了
+                    # 真机实验表明，直接给定夹爪速度（更快的速度）效果比插值的更好，感觉是因为夹爪控制延迟的原因，通过更快的速度来抵消控制延迟的影响
+                    speed = 0.5
                     gripper.goto(
                         width=target_pos * self.scale,
                         speed=speed,

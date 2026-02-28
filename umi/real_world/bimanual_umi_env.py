@@ -244,7 +244,9 @@ class BimanualUmiEnv:
                     robot_ip=rc['robot_ip'],
                     frequency=200,
                     Kx_scale=1.0,
-                    Kxd_scale=np.array([2.0,1.5,2.0,1.0,1.0,1.0]),
+                    # Kx_scale=0.2,
+                    # Kxd_scale=np.array([2.0,1.5,2.0,1.0,1.0,1.0]),
+                    Kxd_scale=np.array([3.0,2.5,3.0,2.0,2.0,2.0]),
                     verbose=False,
                     receive_latency=rc['robot_obs_latency']
                 )
