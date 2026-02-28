@@ -287,10 +287,10 @@ def main(input, output, out_res, out_fov, compression_level,
 if __name__ == "__main__":
     # 设置默认参数, 方便在IDE中调试
     # 注意，这里不能有空格。错误写法：-o my_demo_session/dataset.zarr.zip
-    sys.argv.extend([
-        "-omy_demo_session/dataset.zarr.zip",
-        "my_demo_session"
-    ])
+    # sys.argv.extend([
+    #     "-omy_demo_session/dataset.zarr.zip",
+    #     "my_demo_session"
+    # ])
     main()
 
 

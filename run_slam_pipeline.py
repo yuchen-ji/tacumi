@@ -123,8 +123,11 @@ def main(session_dir, calibration_dir):
 
 ## %%
 if __name__ == "__main__":
-    session_dir = ("my_demo_session2",)
-    main(session_dir)
-    # main()
+    main()
+    
+    # # Example usage:
+    # session_dir = ("my_demo_session2",)
+    # main(session_dir)
+
 
 # %%

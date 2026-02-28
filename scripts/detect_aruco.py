@@ -25,12 +25,12 @@ from umi.common.cv_util import (
 )
 
 # %%
-# @click.command()
-# @click.option('-i', '--input', required=True)
-# @click.option('-o', '--output', required=True)
-# @click.option('-ij', '--intrinsics_json', required=True)
-# @click.option('-ay', '--aruco_yaml', required=True)
-# @click.option('-n', '--num_workers', type=int, default=4)
+@click.command()
+@click.option('-i', '--input', required=True)
+@click.option('-o', '--output', required=True)
+@click.option('-ij', '--intrinsics_json', required=True)
+@click.option('-ay', '--aruco_yaml', required=True)
+@click.option('-n', '--num_workers', type=int, default=4)
 def main(input, output, intrinsics_json, aruco_yaml, num_workers):
     cv2.setNumThreads(num_workers)
 
@@ -77,19 +77,19 @@ def main(input, output, intrinsics_json, aruco_yaml, num_workers):
 
 # %%
 if __name__ == "__main__":
-    # main()
+    main()
 
-    # Example usage:
-    # 使用前需要先注释掉main()函数中的@click.command()装饰器
-    input = 'my_demo_session/demos/gripper_calibration_C3441327029233_2025.08.20_18.12.18.172700/raw_video.mp4'
-    output = 'my_demo_session/demos/gripper_calibration_C3441327029233_2025.08.20_18.12.18.172700/tag_detection.pkl'
-    intrinsics_json = 'example/calibration/gopro_intrinsics_2_7k.json'
-    aruco_yaml = 'example/calibration/aruco_config.yaml'
-    num_workers = 4
-    main(
-        input=input,
-        output=output,
-        intrinsics_json=intrinsics_json,
-        aruco_yaml=aruco_yaml,
-        num_workers=num_workers
-    )
+    # # Example usage:
+    # # 使用前需要先注释掉main()函数中的@click.command()装饰器
+    # input = 'my_demo_session/demos/gripper_calibration_C3441327029233_2025.08.20_18.12.18.172700/raw_video.mp4'
+    # output = 'my_demo_session/demos/gripper_calibration_C3441327029233_2025.08.20_18.12.18.172700/tag_detection.pkl'
+    # intrinsics_json = 'example/calibration/gopro_intrinsics_2_7k.json'
+    # aruco_yaml = 'example/calibration/aruco_config.yaml'
+    # num_workers = 4
+    # main(
+    #     input=input,
+    #     output=output,
+    #     intrinsics_json=intrinsics_json,
+    #     aruco_yaml=aruco_yaml,
+    #     num_workers=num_workers
+    # )

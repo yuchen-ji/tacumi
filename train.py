@@ -4,11 +4,16 @@ Training:
 python train.py --config-name=train_diffusion_lowdim_workspace
 """
 
-# 首次运行train.py会从huggingface下载权重，需要设置代理，才能正常下载
 import os
-os.environ['https_proxy'] = 'http://127.0.0.1:7890'
-os.environ['http_proxy'] = 'http://127.0.0.1:7890'
-os.environ['all_proxy'] = 'socks5://127.0.0.1:7890'
+# # 首次运行train.py会从huggingface下载权重，需要设置代理，才能正常下载
+# os.environ['https_proxy'] = 'http://127.0.0.1:7890'
+# os.environ['http_proxy'] = 'http://127.0.0.1:7890'
+# os.environ['all_proxy'] = 'socks5://127.0.0.1:7890'
+
+# # 对于在国内，不方便使用VPN的，可以使用huggingface镜像
+# os.environ['CURL_CA_BUNDLE'] = ''
+# os.environ['HF_ENDPOINT'] = 'https://hf-mirror.com'
+
 # 禁用wandb
 os.environ["WANDB_DISABLED"]="true"
 
@@ -45,7 +50,7 @@ if __name__ == "__main__":
     # 设置默认参数, 方便在IDE中调试
     sys.argv.extend([
         "--config-name=train_diffusion_unet_timm_umi_workspace",
-        "task.dataset_path=cup_in_the_wild.zarr.zip"
+        "task.dataset_path=training_data/cup_in_the_wild/cup_in_the_wild.zarr.zip"
     ])
     main()
 
