@@ -135,6 +135,21 @@ def main(input, output, out_res, out_fov, compression_level,
                 episode_data[robot_name + '_demo_start_pose'] = demo_start_pose
                 episode_data[robot_name + '_demo_end_pose'] = demo_end_pose
             
+            # ADDED 26.03.22 新增对触觉数据的支持
+            # Load tactile data if available (tactile.npy alongside raw_video.mp4)
+            for cam_id, camera in enumerate(cameras):
+                video_path_rel = camera['video_path']
+                video_path_abs = demos_path.joinpath(video_path_rel).absolute()
+                video_start, video_end = camera['video_start_end']
+
+                npy_path = video_path_abs.parent.joinpath('tactile.npy')
+                if npy_path.is_file():
+                    tactile_arr = np.load(npy_path, allow_pickle=True)
+                    tactile_slice = tactile_arr[video_start:video_end]
+                    episode_data[f'camera{cam_id}_tactile'] = tactile_slice.astype(np.float32)
+                    print("tactile data added")
+            # ADDED END
+                    
             out_replay_buffer.add_episode(data=episode_data, compressors=None)
             
             # aggregate video gen aguments

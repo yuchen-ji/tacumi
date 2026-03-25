@@ -53,6 +53,9 @@ def get_real_obs_dict(
                     out_imgs = out_imgs.astype(np.float32) / 255
             # THWC to TCHW
             obs_dict_np[key] = np.moveaxis(out_imgs,-1,1)
+        elif type == 'tactile':
+            this_data_in = env_obs[key]
+            obs_dict_np[key] = this_data_in
         elif type == 'low_dim':
             this_data_in = env_obs[key]
             obs_dict_np[key] = this_data_in
@@ -89,6 +92,9 @@ def get_real_umi_obs_dict(
                     out_imgs = out_imgs.astype(np.float32) / 255
             # THWC to TCHW
             obs_dict_np[key] = np.moveaxis(out_imgs,-1,1)
+        elif type == 'tactile':
+            this_data_in = env_obs[key]
+            obs_dict_np[key] = this_data_in
         elif type == 'low_dim' and ('eef' not in key):
             this_data_in = env_obs[key]
             obs_dict_np[key] = this_data_in

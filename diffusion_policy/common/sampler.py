@@ -1,3 +1,8 @@
+"""
+Modified by yuchen, 26.03.22
+添加了处理触觉数据的代码，并且支持仅视觉（触觉缺失）的代码
+"""
+
 from typing import Optional
 import numpy as np
 import random
@@ -24,14 +29,17 @@ class SequenceSampler:
         replay_buffer: ReplayBuffer,
         rgb_keys: list,
         lowdim_keys: list,
-        key_horizon: dict,
-        key_latency_steps: dict,
-        key_down_sample_steps: dict,
+        tactile_keys: list=None,
+        key_horizon: dict={},
+        key_latency_steps: dict={},
+        key_down_sample_steps: dict={},
         episode_mask: Optional[np.ndarray]=None,
         action_padding: bool=False,
         repeat_frame_prob: float=0.0,
         max_duration: Optional[float]=None
     ):
+        if tactile_keys is None:
+            tactile_keys = []
         episode_ends = replay_buffer.episode_ends[:]
 
         # load gripper_width
@@ -88,7 +96,8 @@ class SequenceSampler:
                 self.replay_buffer[key] = replay_buffer[key][:]
         for key in rgb_keys:
             self.replay_buffer[key] = replay_buffer[key]
-        
+        for key in tactile_keys:
+            self.replay_buffer[key] = replay_buffer[key]
         
         if 'action' in replay_buffer:
             self.replay_buffer['action'] = replay_buffer['action'][:]
@@ -106,6 +115,7 @@ class SequenceSampler:
         self.indices = indices
         self.rgb_keys = rgb_keys
         self.lowdim_keys = lowdim_keys
+        self.tactile_keys = tactile_keys
         self.key_horizon = key_horizon
         self.key_latency_steps = key_latency_steps
         self.key_down_sample_steps = key_down_sample_steps
@@ -120,7 +130,7 @@ class SequenceSampler:
 
         result = dict()
 
-        obs_keys = self.rgb_keys + self.lowdim_keys
+        obs_keys = self.rgb_keys + self.lowdim_keys + self.tactile_keys
         if self.ignore_rgb_is_applied:
             obs_keys = self.lowdim_keys
 
@@ -131,7 +141,7 @@ class SequenceSampler:
             this_latency_steps = self.key_latency_steps[key]
             this_downsample_steps = self.key_down_sample_steps[key]
             
-            if key in self.rgb_keys:
+            if key in self.rgb_keys or key in self.tactile_keys:
                 assert this_latency_steps == 0
                 num_valid = min(this_horizon, (current_idx - start_idx) // this_downsample_steps + 1)
                 slice_start = current_idx - (num_valid - 1) * this_downsample_steps

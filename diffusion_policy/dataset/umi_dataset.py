@@ -1,3 +1,7 @@
+"""
+Modified by yuchen, 26.03.22
+添加了处理触觉数据的代码，并且支持仅视觉（触觉缺失）的代码
+"""
 import copy
 from typing import Dict, Optional
 
@@ -91,6 +95,7 @@ class UmiDataset(BaseDataset):
         self.num_robot = 0
         rgb_keys = list()
         lowdim_keys = list()
+        tactile_keys = list()
         key_horizon = dict()
         key_down_sample_steps = dict()
         key_latency_steps = dict()
@@ -102,6 +107,8 @@ class UmiDataset(BaseDataset):
                 rgb_keys.append(key)
             elif type == 'low_dim':
                 lowdim_keys.append(key)
+            elif type == 'tactile':
+                tactile_keys.append(key)
 
             if key.endswith('eef_pos'):
                 self.num_robot += 1
@@ -148,6 +155,7 @@ class UmiDataset(BaseDataset):
             replay_buffer=replay_buffer,
             rgb_keys=rgb_keys,
             lowdim_keys=self.sampler_lowdim_keys,
+            tactile_keys=tactile_keys,
             key_horizon=key_horizon,
             key_latency_steps=key_latency_steps,
             key_down_sample_steps=key_down_sample_steps,
@@ -160,6 +168,7 @@ class UmiDataset(BaseDataset):
         self.replay_buffer = replay_buffer
         self.rgb_keys = rgb_keys
         self.lowdim_keys = lowdim_keys
+        self.tactile_keys = tactile_keys
         self.key_horizon = key_horizon
         self.key_latency_steps = key_latency_steps
         self.key_down_sample_steps = key_down_sample_steps
@@ -179,6 +188,7 @@ class UmiDataset(BaseDataset):
             replay_buffer=self.replay_buffer,
             rgb_keys=self.rgb_keys,
             lowdim_keys=self.sampler_lowdim_keys,
+            tactile_keys=self.tactile_keys,
             key_horizon=self.key_horizon,
             key_latency_steps=self.key_latency_steps,
             key_down_sample_steps=self.key_down_sample_steps,
@@ -242,8 +252,8 @@ class UmiDataset(BaseDataset):
                 raise RuntimeError('unsupported')
             normalizer[key] = this_normalizer
 
-        # image
-        for key in self.rgb_keys:
+        # image and tactile
+        for key in self.rgb_keys + self.tactile_keys:
             normalizer[key] = get_image_identity_normalizer()
         return normalizer
 
@@ -269,6 +279,10 @@ class UmiDataset(BaseDataset):
         for key in self.sampler_lowdim_keys:
             obs_dict[key] = data[key].astype(np.float32)
             del data[key]
+        for key in self.tactile_keys:
+            if key in data:
+                obs_dict[key] = data[key].astype(np.float32)
+                del data[key]
         
         # generate relative pose between two ees
         for robot_id in range(self.num_robot):

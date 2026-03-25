@@ -90,6 +90,12 @@ policy:
     use_group_norm: True
     share_rgb_model: False
 
+    # TODO: 这里是和触觉相关的配置文件
+    # 当使用触觉数据时，需要将use_tactile设置为true
+    # 并且取消注释camera0_tactile in task/umi.yaml
+    use_tactile: false
+    tactile_model_choice: "simple_cnn"  # or "resnet18"
+
   num_inference_steps: 16
   input_pertub: 0.1 # reference: https://github.com/forever208/DDPM-IP
   n_layer: 7

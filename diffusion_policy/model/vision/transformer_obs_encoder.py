@@ -1,3 +1,9 @@
+"""
+Modified by yuchen, 26.03.22
+添加了处理触觉数据的代码，并且支持仅视觉（触觉缺失）的代码
+通过 use_tactile 来确定是否使用触觉数据
+"""
+
 import copy
 
 import timm
@@ -13,6 +19,37 @@ from diffusion_policy.model.common.module_attr_mixin import ModuleAttrMixin
 from diffusion_policy.common.pytorch_util import replace_submodules
 
 logger = logging.getLogger(__name__)
+
+def make_viridis_colormap():
+    """Returns a (256, 3) float Tensor — the viridis colormap from matplotlib."""
+    from matplotlib import cm
+    viridis = cm.get_cmap('viridis', 256)
+    colormap = viridis(np.arange(256))[:, :3]
+    return torch.FloatTensor(colormap)
+
+
+class SimpleCNN(nn.Module):
+    """Lightweight CNN encoder for tactile color images."""
+    def __init__(self, out_dim=768):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1)
+        self.bn1   = nn.BatchNorm2d(16)
+        self.conv2 = nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1)
+        self.bn2   = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.bn3   = nn.BatchNorm2d(64)
+        self.pool  = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc    = nn.Linear(64, out_dim)
+
+    def forward(self, x):
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        return x
+
 
 class AttentionPool2d(nn.Module):
     def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None):
@@ -56,6 +93,7 @@ class TransformerObsEncoder(ModuleAttrMixin):
             model_name: str='vit_base_patch16_clip_224.openai',
             global_pool: str='',
             transforms: list=None,
+            use_tactile: bool=False,
             n_emb: int=768,
             pretrained: bool=False,
             frozen: bool=False,
@@ -64,16 +102,20 @@ class TransformerObsEncoder(ModuleAttrMixin):
             # use single rgb model for all rgb inputs
             share_rgb_model: bool=False,
             feature_aggregation: str=None,
-            downsample_ratio: int=32
+            downsample_ratio: int=32,
+            tactile_model_choice: str='simple_cnn',
         ):
         """
         Assumes rgb input: B,T,C,H,W
         Assumes low_dim input: B,T,D
         """
         super().__init__()
+
+        self.use_tactile = use_tactile
         
         rgb_keys = list()
         low_dim_keys = list()
+        tactile_keys = list()
         key_model_map = nn.ModuleDict()
         key_transform_map = nn.ModuleDict()
         key_projection_map = nn.ModuleDict()
@@ -87,6 +129,19 @@ class TransformerObsEncoder(ModuleAttrMixin):
             num_classes=0            # remove classification layer
         )
         self.model_name = model_name
+
+        if self.use_tactile:
+            if tactile_model_choice == 'resnet18':
+                tactile_model = timm.create_model(
+                    model_name="resnet18",
+                    pretrained=False,
+                    global_pool=global_pool,
+                    num_classes=0
+                )
+            elif tactile_model_choice == 'simple_cnn':
+                tactile_model = SimpleCNN(out_dim=n_emb)
+            else:
+                raise ValueError(f"Unknown tactile_model_choice: {tactile_model_choice}")
 
         if frozen:
             assert pretrained
@@ -151,6 +206,13 @@ class TransformerObsEncoder(ModuleAttrMixin):
                 num_heads=feature_dim // 64,
                 output_dim=feature_dim
             )
+
+        if self.use_tactile:
+            self.register_buffer(
+                "viridis_map",
+                make_viridis_colormap(),
+                persistent=False
+            )
         
         image_shape = None
         obs_shape_meta = shape_meta['obs']
@@ -201,6 +263,11 @@ class TransformerObsEncoder(ModuleAttrMixin):
                 key_projection_map[key] = proj
 
                 low_dim_keys.append(key)
+            elif type == 'tactile':
+                if self.use_tactile:
+                    tactile_keys.append(key)
+                    key_model_map[key] = tactile_model
+                    key_transform_map[key] = transform
             else:
                 raise RuntimeError(f"Unsupported obs type: {type}")
         
@@ -217,6 +284,7 @@ class TransformerObsEncoder(ModuleAttrMixin):
         self.share_rgb_model = share_rgb_model
         self.rgb_keys = rgb_keys
         self.low_dim_keys = low_dim_keys
+        self.tactile_keys = tactile_keys
         self.key_shape_map = key_shape_map
 
         logger.info(
@@ -285,6 +353,34 @@ class TransformerObsEncoder(ModuleAttrMixin):
             emb = self.key_projection_map[key](data)
             assert emb.shape[-1] == self.n_emb
             embeddings.append(emb)
+
+        if self.use_tactile:
+            for key in self.tactile_keys:
+                tactile_data = obs_dict[key]
+                B, T = tactile_data.shape[:2]
+                assert B == batch_size
+                tactile_data = tactile_data.reshape(B * T, *tactile_data.shape[2:])
+
+                left_tactile = tactile_data[:, :, :32].clamp(0, 1)
+                right_tactile = tactile_data[:, :, 32:].clamp(0, 1)
+
+                left_index = (left_tactile * 255).long().clamp(0, 255)
+                right_index = (right_tactile * 255).long().clamp(0, 255)
+
+                left_color = self.viridis_map[left_index]
+                right_color = self.viridis_map[right_index]
+                tactile_images = torch.cat([left_color, right_color], dim=1)
+                tactile_images = tactile_images.permute(0, 3, 1, 2)
+
+                device = next(self.key_model_map[key].parameters()).device
+                tactile_images = tactile_images.to(device)
+
+                raw_feature = self.key_model_map[key](tactile_images)
+                assert raw_feature.dim() == 2
+                assert raw_feature.size(0) == B * T
+
+                emb = raw_feature.reshape(B, T, self.n_emb)
+                embeddings.append(emb)
         
         # concatenate all features along t
         result = torch.cat(embeddings, dim=1)
