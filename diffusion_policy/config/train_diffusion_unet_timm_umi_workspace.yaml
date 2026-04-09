@@ -93,6 +93,10 @@ policy:
     use_group_norm: True
     share_rgb_model: False
     imagenet_norm: True
+    # TODO: 这里是和触觉相关的配置文件
+    use_tactile: true
+    tactile_model_choice: "pretrain"
+    pretrain_ckpt_path: None
 
   num_inference_steps: 16
   obs_as_global_cond: True
@@ -162,6 +166,7 @@ optimizer:
   betas: [0.95, 0.999]
   eps: 1.0e-8
   weight_decay: 1.0e-6
+  pretrain_clip_lr: 2.0e-5
 
 training:
   device: "cuda:0"

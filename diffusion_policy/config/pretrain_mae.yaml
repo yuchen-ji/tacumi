@@ -1,0 +1,44 @@
+defaults:
+  - _self_
+  - task: umi       
+
+transforms:
+  - type: RandomCrop
+    ratio: 0.95
+  - _target_: torchvision.transforms.ColorJitter
+    brightness: 0.3
+    contrast: 0.4
+    saturation: 0.5
+    hue: 0.08
+
+dataloader:
+  # batch_size: 128
+  batch_size: 64
+  num_workers: 8
+  pin_memory: false
+  persistent_workers: true
+
+task:
+  cache_dir: ${oc.env:HOME}/.cache/touch_in_the_wild/zarr
+
+training:
+  seed: 42
+  val_ratio: 0.1
+  num_epochs: 5
+  clip_lr: 3e-5
+  encoder_lr: 1e-4
+  embed_dim: 768
+  num_heads: 8
+  attention_type: "cls"  # or "patch"
+  predict_channel: 1    # 1 or 3
+  tact_patch_size: 4
+  ema_pretrain: true
+  ema_decay: 0.9995
+  mask_ratio_min: 0.6   
+  mask_ratio_max: 0.8  
+  unmask_prob: 0.05
+
+logging:
+  project: umi
+  tags:
+    - pretrain

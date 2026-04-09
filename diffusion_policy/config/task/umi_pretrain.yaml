@@ -4,7 +4,7 @@ camera_obs_latency: 0.125
 robot_obs_latency: 0.0001
 gripper_obs_latency: 0.02
 dataset_frequeny: 0 #59.94
-obs_down_sample_steps: 3 # 3, 1
+obs_down_sample_steps: 2 # 3, 1
 
 low_dim_obs_horizon: 2
 img_obs_horizon: 2
@@ -58,9 +58,7 @@ shape_meta: &shape_meta
       down_sample_steps: ${task.obs_down_sample_steps} # float
       type: low_dim
       ignore_by_policy: ${task.ignore_proprioception}
-      
-    # TODO: 这里是和触觉相关的配置文件
-    # 当使用触觉数据时，需要取消注释，(requires tactile.npy in demo data)
+    # NOTE: 这里是和触觉相关的配置
     camera0_tactile:
       shape: [12, 64]
       horizon: ${task.img_obs_horizon} # int
@@ -68,6 +66,7 @@ shape_meta: &shape_meta
       down_sample_steps: ${task.obs_down_sample_steps} # int
       type: tactile
       ignore_by_policy: False
+
 
     # pose with respect to episode start
     # robot0_eef_pos_wrt_start:

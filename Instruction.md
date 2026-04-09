@@ -23,8 +23,10 @@ rsync -avh --info=progress2 --partial --append-verify \
 ```
 
 ### 3 移植处理触觉模态的代码，from touch in the wild
+
 #### 3.1 2个配置文件
 主要通过这2个配置文件来确定后续代码是否需要使用tactile数据。
+
 1. umi.yaml
 ```yaml
 # TODO: 这里是和触觉相关的配置文件
@@ -37,7 +39,35 @@ camera0_tactile:
   type: tactile
   ignore_by_policy: False
 ```
-2. train_diffusion_transformer_umi_workspace.yaml
+
+2. pretrain_mae.yaml
+用于pretrain相关的配置，超参数等
+```yaml
+# 完全从touch in the wild继承
+dataloader:
+  # batch_size: 128
+  batch_size: 64
+  num_workers: 8
+  pin_memory: false
+  persistent_workers: true
+```
+
+3. umi_pretrain.yaml
+主要用于pretrain加载数据集的配置
+```yaml
+# 完全从touch in the wild继承
+```
+
+4. train_diffusion_transformer_umi_workspace.yaml
+```yaml
+# TODO: 这里是和触觉相关的配置文件
+# 当使用触觉数据时，需要将use_tactile设置为true
+# 并且取消注释camera0_tactile in task/umi.yaml
+use_tactile: false
+tactile_model_choice: "simple_cnn"  # or "resnet18"
+```
+
+5. train_diffusion_unet_timm_umi_workspace.yaml
 ```yaml
 # TODO: 这里是和触觉相关的配置文件
 # 当使用触觉数据时，需要将use_tactile设置为true
@@ -47,7 +77,9 @@ tactile_model_choice: "simple_cnn"  # or "resnet18"
 ```
 
 #### 3.2 修改的代码
+
 1. 07_generate_replay_buffer.py
+生成数据集的部分，新增对触觉模态的支持
 ```python
 # ADDED 26.03.22 新增对触觉数据的支持
 # Load tactile data if available (tactile.npy alongside raw_video.mp4)
@@ -64,6 +96,7 @@ for cam_id, camera in enumerate(cameras):
         print("tactile data added")
 # ADDED END
 ```
+
 2. sampler.py
 这个文件主要是从数据集中采样，被`umi_dataset.py`调用
 ```python
@@ -74,6 +107,7 @@ if tactile_keys is None:
 ```
 
 3. umi_dataset.py
+处理数据集输入时，增加对触觉模态的支持
 ```python
 # 在数据集中，增加了对tactile模态的支持
 # 当tactile模态缺省时，也同样支持
@@ -84,9 +118,9 @@ elif type == 'tactile':
 ```
 
 4. transformer_obs_encoder.py
+新增了simplecnn作为 tactile encoder
+同时，支持让transformer的encoder加上tactile feature。所有feature cat到一起
 ```python
-# 新增了simplecnn作为 tactile encoder
-# 同时，支持让transformer的encoder加上tactile feature。所有feature cat到一起
 if self.use_tactile:
     for key in self.tactile_keys:
         tactile_data = obs_dict[key]
@@ -117,12 +151,46 @@ if self.use_tactile:
 ```
 
 5. real_inference_util.py
+推理代码时，在获取数据阶段，新增了对触觉数据的获取
 ```python
-# 推理代码时，在获取数据阶段，新增了对触觉数据的获取
 # get_real_obs_dict() 和 get_real_umi_obs_dict()
 # 需要在配置文件中启用对tactile的支持
 elif type == 'tactile':
     this_data_in = env_obs[key]
     obs_dict_np[key] = this_data_in
+```
+
+6. umi_pretrain_mae.py
+TactileAutoencoderDataset 数据集类，pretrain_mae.py 依赖此文件
+
+7. timm_obs_encoder.py
+把机器人采集到的原始多模态观测数据（RGB图像 + 触觉 + 低维状态），统一压缩编码成一个特征向量，供后面的 UNet 扩散策略使用。
+这里完全照搬自touch in the wild
+
+
+
+
+### 4 预训练视觉触觉融合
+
+#### 4.1 下载数据集
+
+```bash
+# 安装hugging face cli
+conda activate umi
+pip install huggingface_hub
+# --resume-download huggingface的地址
+# --local-dir 下载到的本地目录
+huggingface-cli download --repo-type dataset --resume-download binghaohuang-robot/touch_in_the_wild-dataset --local-dir /home/yuchen/project/datasets/
+```
+
+#### 4.2 预训练视触觉encoder
+
+```bash
+# 训练encoder
+python -m pretrain_mae.pretrain_mae task.dataset_path=datasets/pretrain_data/pretrain.zarr.zip
+
+# 可以通过以下指令，查看模块文件的路径
+# 通常来说，对应的都是：project_path/pretrain_mae/pretrain_mae.py
+python -c "import pretrain_mae.pretrain_mae as m; print(m.__file__)"
 ```
 

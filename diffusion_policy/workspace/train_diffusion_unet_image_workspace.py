@@ -57,23 +57,55 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
         # self.optimizer = hydra.utils.instantiate(
         #     cfg.optimizer, params=self.model.parameters())
 
-        obs_encorder_lr = cfg.optimizer.lr
-        if cfg.policy.obs_encoder.pretrained:
-            obs_encorder_lr *= 0.1
-            print('==> reduce pretrained obs_encorder\'s lr')
-        obs_encorder_params = list()
-        for param in self.model.obs_encoder.parameters():
-            if param.requires_grad:
-                obs_encorder_params.append(param)
-        print(f'obs_encorder params: {len(obs_encorder_params)}')
-        param_groups = [
-            {'params': self.model.model.parameters()},
-            {'params': obs_encorder_params, 'lr': obs_encorder_lr}
-        ]
+        split_for_tactile = (
+            cfg.policy.obs_encoder.use_tactile
+            and cfg.policy.obs_encoder.tactile_model_choice == "pretrain"
+        )
+
+        if split_for_tactile:
+            main_lr = cfg.optimizer.lr
+            obsenc_lr = main_lr * 0.1
+            clip_lr = cfg.optimizer.pretrain_clip_lr
+
+            clip_params = []
+            obs_enc_main = []
+            obs_enc_tactile = []
+            for name, param in self.model.obs_encoder.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if "clip_encoder" in name:
+                    clip_params.append(param)
+                elif "pretrained_tactile_model" in name:
+                    obs_enc_tactile.append(param)
+                else:
+                    obs_enc_main.append(param)
+
+            param_groups = [
+                {'params': self.model.model.parameters(), 'lr': main_lr},
+                {'params': obs_enc_tactile, 'lr': obsenc_lr},
+                {'params': clip_params, 'lr': clip_lr},
+            ]
+            print(f"==> UNet at {main_lr}, CLIP encoder at {clip_lr}, other tactile joint encoder at {obsenc_lr}")
+        else:
+            obs_encorder_lr = cfg.optimizer.lr
+            if cfg.policy.obs_encoder.pretrained:
+                obs_encorder_lr *= 0.1
+                print('==> reduce pretrained obs_encorder\'s lr')
+            obs_encorder_params = list()
+            for param in self.model.obs_encoder.parameters():
+                if param.requires_grad:
+                    obs_encorder_params.append(param)
+            print(f'obs_encorder params: {len(obs_encorder_params)}')
+            param_groups = [
+                {'params': self.model.model.parameters()},
+                {'params': obs_encorder_params, 'lr': obs_encorder_lr}
+            ]
+
         # self.optimizer = hydra.utils.instantiate(
         #     cfg.optimizer, params=param_groups)
         optimizer_cfg = OmegaConf.to_container(cfg.optimizer, resolve=True)
         optimizer_cfg.pop('_target_')
+        optimizer_cfg.pop('pretrain_clip_lr', None)
         self.optimizer = torch.optim.AdamW(
             params=param_groups,
             **optimizer_cfg
