@@ -492,15 +492,21 @@ def main(input, output, robot_config,
                             raw_action = result['action_pred'][0].detach().to('cpu').numpy()
                             action = get_real_umi_action(raw_action, obs, action_pose_repr)
                             print('Inference latency:', time.time() - s)
-                        
+
                         # convert policy action to env actions
                         this_target_poses = action
                         assert this_target_poses.shape[1] == len(robots_config) * 7
                         for target_pose in this_target_poses:
                             for robot_idx in range(len(robots_config)):
+                                # action 里 gripper 通道是 -1/1（policy 直接输出，未再映射）；
+                                # 碰撞检测需要真实宽度，这里只为该次调用做局部转换，不修改 action 数组。
+                                gripper_signal = target_pose[robot_idx * 7 + 6]
+                                gripper_width_for_collision = (
+                                    max_gripper_width if gripper_signal > 0.0 else 0.0
+                                )
                                 solve_table_collision(
                                     ee_pose=target_pose[robot_idx * 7: robot_idx * 7 + 6],
-                                    gripper_width=target_pose[robot_idx * 7 + 6],
+                                    gripper_width=gripper_width_for_collision,
                                     height_threshold=robots_config[robot_idx]['height_threshold']
                                 )
                             

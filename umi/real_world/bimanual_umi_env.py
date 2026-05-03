@@ -278,13 +278,16 @@ class BimanualUmiEnv:
         self.robots_config = robots_config
         self.grippers = grippers
         self.grippers_config = grippers_config
-        # Track last gripper command timing/width for rate limiting.
-        self.gripper_command_frequency = gripper_command_frequency
-        self.gripper_command_period = 1.0 / max(gripper_command_frequency, 1e-6)
-        self._last_gripper_cmd_time = [None] * len(self.grippers)
-        # self.gripper_command_min_delta = gripper_command_min_delta
-        # self.gripper_command_max_interval = gripper_command_max_interval
-        # self._last_gripper_cmd_width = [None] * len(self.grippers)
+        # Gripper open/close discrete control parameters.
+        # 阈值同时服务两条路径：
+        #   - policy 路径：action 通道是 -1/1，与 0.045 比较得到正确的 open/close
+        #   - teleop 路径：action 通道是真实宽度 [0, 0.09]，0~0.045 -> close，0.045~0.09 -> open
+        self.gripper_open_width = 0.09
+        self.gripper_close_width = 0.0
+        self.gripper_state_threshold = 0.5 * self.gripper_open_width
+        # 最近一次下发的离散开合状态（-1 关 / 1 开），初始假设夹具处于打开状态。
+        # 用于"状态变化才下发"以及 obs（robot{i}_gripper_width）的离散值。
+        self._last_gripper_state = [1] * len(self.grippers)
 
         self.multi_cam_vis = multi_cam_vis
         self.frequency = frequency
@@ -466,21 +469,30 @@ class BimanualUmiEnv:
             # update obs_data
             obs_data.update(robot_obs)
 
-        # align gripper obs
-        gripper_obs_timestamps = last_timestamp - (
-            np.arange(self.gripper_obs_horizon)[::-1] * self.gripper_down_sample_steps * dt)
-        for robot_idx, last_gripper_data in enumerate(last_grippers_data):
-            # align gripper obs
-            gripper_interpolator = get_interp1d(
-                t=last_gripper_data['gripper_timestamp'],
-                x=last_gripper_data['gripper_position'][...,None]
-            )
-            gripper_obs = {
-                f'robot{robot_idx}_gripper_width': gripper_interpolator(gripper_obs_timestamps)
-            }
 
-            # update obs_data
-            obs_data.update(gripper_obs)
+        # # align gripper obs
+        # gripper_obs_timestamps = last_timestamp - (
+        #     np.arange(self.gripper_obs_horizon)[::-1] * self.gripper_down_sample_steps * dt)
+        # for robot_idx, last_gripper_data in enumerate(last_grippers_data):
+        #     # align gripper obs
+        #     gripper_interpolator = get_interp1d(
+        #         t=last_gripper_data['gripper_timestamp'],
+        #         x=last_gripper_data['gripper_position'][...,None]
+        #     )
+        #     gripper_obs = {
+        #         f'robot{robot_idx}_gripper_width': gripper_interpolator(gripper_obs_timestamps)
+        #     }
+
+        #     # update obs_data
+        #     obs_data.update(gripper_obs)
+
+        # align gripper obs - 使用最近一次下发的离散开合状态（-1/1）作为观测，
+        # 与训练数据 -1/1 表征一致。初始为 1（open），exec_actions 触发状态切换时同步翻转。
+        for robot_idx in range(len(self.grippers)):
+            state = self._last_gripper_state[robot_idx]
+            obs_data[f'robot{robot_idx}_gripper_width'] = np.full(
+                (self.gripper_obs_horizon, 1), float(state), dtype=np.float32,
+            )
 
         # accumulate obs
         if self.obs_accumulator is not None:
@@ -548,22 +560,46 @@ class BimanualUmiEnv:
                 ### 1. 使用较低的夹爪控制频率
                 ### =============================================================================
 
-                # NOTE: 夹具控制与机械臂解耦：仅按指令间时间间隔限频
-                g_target_time = new_timestamps[i] - g_latency
-                last_cmd_time = self._last_gripper_cmd_time[robot_idx]
+                # # NOTE: 夹具控制与机械臂解耦：仅按指令间时间间隔限频
+                # g_target_time = new_timestamps[i] - g_latency
+                # last_cmd_time = self._last_gripper_cmd_time[robot_idx]
 
-                if last_cmd_time is not None and g_target_time <= last_cmd_time:
+                # if last_cmd_time is not None and g_target_time <= last_cmd_time:
+                #     continue
+
+                # is_first = (last_cmd_time is None)
+                # enough_time = is_first or ((g_target_time - last_cmd_time) >= self.gripper_command_period)
+
+                # if enough_time:
+                #     gripper.schedule_waypoint(
+                #         pos=g_actions,
+                #         target_time=g_target_time
+                #     )
+                #     self._last_gripper_cmd_time[robot_idx] = g_target_time
+
+
+                ### =============================================================================
+                ### 3. 状态变化才下发：把 g_actions 阈值化为 -1/1，与上一次状态比较，
+                ###    一致则跳过；不一致则映射成 open_width/close_width 并下发，同步刷新状态。
+                ###    g_actions 既可能是 -1/1（policy 路径）也可能是 [0, 0.09]（teleop 路径），
+                ###    用统一的中点阈值 gripper_state_threshold 处理。
+                ### =============================================================================
+                g_target_time = new_timestamps[i] - g_latency
+                desired_state = 1 if g_actions > self.gripper_state_threshold else -1
+                last_state = self._last_gripper_state[robot_idx]
+
+                if last_state == desired_state:
+                    # 同一状态不重复下发，避免刷爆 FrankaHandController
                     continue
 
-                is_first = (last_cmd_time is None)
-                enough_time = is_first or ((g_target_time - last_cmd_time) >= self.gripper_command_period)
-
-                if enough_time:
-                    gripper.schedule_waypoint(
-                        pos=g_actions,
-                        target_time=g_target_time
-                    )
-                    self._last_gripper_cmd_time[robot_idx] = g_target_time
+                target_width = (
+                    self.gripper_open_width if desired_state == 1 else self.gripper_close_width
+                )
+                gripper.schedule_waypoint(
+                    pos=target_width,
+                    target_time=g_target_time,
+                )
+                self._last_gripper_state[robot_idx] = desired_state
 
 
                 ### =============================================================================
@@ -629,8 +665,8 @@ class BimanualUmiEnv:
             start_time = time.time()
         self.start_time = start_time
         # Reset gripper command tracking at the beginning of each episode.
-        self._last_gripper_cmd_time = [None] * len(self.grippers)
-        # self._last_gripper_cmd_width = [None] * len(self.grippers)
+        # 默认夹具初始处于打开状态（1），与 __init__ 保持一致。
+        self._last_gripper_state = [1] * len(self.grippers)
 
         assert self.is_ready
 
