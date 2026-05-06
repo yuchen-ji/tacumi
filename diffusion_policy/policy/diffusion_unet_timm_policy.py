@@ -155,6 +155,10 @@ class DiffusionUnetTimmPolicy(BaseImagePolicy):
         # unnormalize prediction
         assert nsample.shape == (B, self.action_horizon, self.action_dim)
         action_pred = self.normalizer['action'].unnormalize(nsample)
+
+        ##模型训练的关于夹爪宽度的输出应该还是连续值，这里再进行二值化，大于0的输出为张开（1），小于等于0的输出为闭合（-1）
+        action_pred[..., -1] = torch.where(action_pred[..., -1] > 0, 1.0, -1.0)
+
         
         result = {
             'action': action_pred,

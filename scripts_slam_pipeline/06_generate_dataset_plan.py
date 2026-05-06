@@ -1,7 +1,10 @@
 """
-python scripts_slam_pipeline/06_generate_dataset_plan.py -i data_workspace/cup_in_the_wild/20240105_zhenjia_packard_2nd_conference_room
+python scripts_slam_pipeline/06_generate_dataset_plan.py -i session_dir1 session_dir2 ...--use_binary_gripper 
 """
-
+"""
+把前面所有步骤得到的信息（视频、轨迹、tag 检测、gripper 标定、左右手分配、时间对齐结果）整合起来，
+自动生成一个 dataset_plan.pkl，用于后续正式构造训练/分析数据集
+"""
 # %%
 import sys
 import os
@@ -38,7 +41,7 @@ from umi.common.interpolation_util import (
 
 
 # %%
-def get_bool_segments(bool_seq):
+def get_bool_segments(bool_seq):   #把一个布尔序列切分成若干连续片段，并给出每段是真还是假,找出连续有效的 episode 片段
     bool_seq = np.array(bool_seq, dtype=bool)
     segment_ends = (np.nonzero(np.diff(bool_seq))[0] + 1).tolist()
     segment_bounds = [0] + segment_ends + [len(bool_seq)]
@@ -54,27 +57,52 @@ def get_bool_segments(bool_seq):
     return segments, segment_type
 
 def pose_interp_from_df(df, start_timestamp=0.0, tx_base_slam=None):
+    #把 camera_trajectory.csv 里按帧记录的离散相机位姿，转换成一个“可以按任意时间查询相机位姿”的插值器。
     # 可以查看camera_trajectory.csv文件，slam的时间戳（df['timestamp']）是从0开始的
-    # start_timestamp是相机的时间戳（实际时间）
+    # start_timestamp参数表示：这段视频在真实时间轴上的起始时间
+    #tx_base_slam 参数表示一个 4×4 变换矩阵，用于把位姿从 SLAM 坐标系 变换到 base 坐标系。 在 tag 坐标系下，SLAM 坐标系的位姿
+
+    """
+    T = [ R  t ]
+        [ 0  1 ]
+    旋转部分 R是一个 3×3 的矩阵，表示坐标系的旋转
+    第 1 列：tag 的 x 轴在 slam 坐标系里朝哪个方向
+    第 2 列：tag 的 y 轴在 slam 坐标系里朝哪个方向
+    第 3 列：tag 的 z 轴在 slam 坐标系里朝哪个方向
+    """
+
+    """
+    df是从 camera_trajectory.csv 读出来的 DataFrame，通常至少包含这些列：
+    timestamp，
+    相机位置（x,y,z）
+    旋转（四元数 q_x, q_y, q_z, q_w）
+    """
     timestamp_sec = df['timestamp'].to_numpy() + start_timestamp
     cam_pos = df[['x', 'y', 'z']].to_numpy()
     cam_rot_quat_xyzw = df[['q_x', 'q_y', 'q_z', 'q_w']].to_numpy()
-    cam_rot = Rotation.from_quat(cam_rot_quat_xyzw)
-    cam_pose = np.zeros((cam_pos.shape[0], 4, 4), dtype=np.float32)
+    cam_rot = Rotation.from_quat(cam_rot_quat_xyzw)  #把四元数表示的旋转，转换成一个 Rotation 对象，方便后面转成旋转矩阵
+    cam_pose = np.zeros((cam_pos.shape[0], 4, 4), dtype=np.float32) #取 cam_pos 这个数组的第 0 维长度（行数），创建一个 (N, 4, 4) 的空齐次矩阵数组
     cam_pose[:,3,3] = 1
     cam_pose[:,:3,3] = cam_pos
     cam_pose[:,:3,:3] = cam_rot.as_matrix()
-    tx_slam_cam = cam_pose
+
+    """
+    从 CSV 读四元数
+    变成 Rotation 对象
+    再转成 3×3 矩阵
+    填进 4×4 齐次矩阵
+    """
+    tx_slam_cam = cam_pose   #相机在 SLAM 坐标系下的位姿
     tx_base_cam = tx_slam_cam   # 如果不传入tx_base_slam的话，直接使用slam坐标系作为默认base坐标系
     # 传入的tx_base_slam是tx_tag_slam，即在tag坐标系下slam的坐标系位姿
     if tx_base_slam is not None:
-        tx_base_cam = tx_base_slam @ tx_slam_cam
+        tx_base_cam = tx_base_slam @ tx_slam_cam  #如果给了 tx_base_slam，那就把相机位姿从 SLAM 坐标系变换到 base 坐标系
     pose_interp = PoseInterpolator(
         t=timestamp_sec, x=mat_to_pose(tx_base_cam))    # 传入的pose应该是一个序列
     # IMPORTANT：这个变量用于对pose插值，根据时间
-    return pose_interp
+    return pose_interp      #pose_interp(t) 来得到时刻 t 的相机位姿
 
-def get_x_projection(tx_tag_this, tx_tag_other):
+def get_x_projection(tx_tag_this, tx_tag_other):    #区分多个 gripper 相机谁是右手、谁是左手
     # tx_tag_this/other 是一个4x4的齐次矩阵，表示cam在tag下的位姿
     t_this_other = tx_tag_other[:,:3,3] - tx_tag_this[:,:3,3]
     # IMPORTANT: 旋转矩阵的每一列是该坐标系在原坐标系下的方向向量！！
@@ -90,15 +118,18 @@ def get_x_projection(tx_tag_this, tx_tag_other):
 @click.command()
 @click.option('-i', '--input', required=True, help='Project directory')
 @click.option('-o', '--output', default=None)
-@click.option('-to', '--tcp_offset', type=float, default=0.205, help="Distance from gripper tip to mounting screw")
+@click.option('-to', '--tcp_offset', type=float, default=0.205, help="Distance from gripper tip to mounting screw") 
+#相机坐标系到 TCP（夹爪工具中心点）坐标系的固定变换
 @click.option('-ts', '--tx_slam_tag', default=None, help="tx_slam_tag.json")
 @click.option('-nz', '--nominal_z', type=float, default=0.072, help="nominal Z value for gripper finger tag")
-@click.option('-ml', '--min_episode_length', type=int, default=24)
+@click.option('-ml', '--min_episode_length', type=int, default=24) #最短 episode 长度，默认 24 帧,短于这个长度的有效片段会被丢弃
 @click.option('--ignore_cameras', type=str, default=None, help="comma separated string of camera serials to ignore")
+@click.option('--use_binary_gripper', is_flag=True, default=True, help='Use gripper_binary_labels.npy')
+
 def main(input, output, tcp_offset, tx_slam_tag,
-         nominal_z, min_episode_length, ignore_cameras):
+         nominal_z, min_episode_length, ignore_cameras, use_binary_gripper):
     # %% stage 0
-    # gather inputs
+    # gather inputs  输入目录和默认输出
     input_path = pathlib.Path(os.path.expanduser(input)).absolute()
     demos_dir = input_path.joinpath('demos')
     if output is None:
@@ -106,6 +137,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
 
     # tcp to camera transform
     # all unit in meters
+    #构造“相机坐标系 → TCP 坐标系”的固定外参变换 tx_cam_tcp。
     # y axis in camera frame
     cam_to_center_height = 0.086 # constant for UMI
     # optical center to mounting screw, positive is when optical center is in front of the mount
@@ -113,13 +145,18 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # 我认为这里应该是写错了，应该是：cam_to_tip_offset = tcp_offset - cam_to_mount_offset
     # 参考 issue，它有一样的想法：https://github.com/real-stanford/universal_manipulation_interface/issues/47
     # TODO: 稍后看一下这个值对实验结果的影响？
-    cam_to_tip_offset = cam_to_mount_offset + tcp_offset    # 0.01465+0.205
+    #同感
+    #cam_to_tip_offset = cam_to_mount_offset + tcp_offset    # 0.01465+0.205
+    cam_to_tip_offset = tcp_offset - cam_to_mount_offset     # 0.205 - 0.01465
 
     pose_cam_tcp = np.array([0, cam_to_center_height, cam_to_tip_offset, 0,0,0])
-    tx_cam_tcp = pose_to_mat(pose_cam_tcp)
+    #构造一个 6 维 pose 向量。通常这种格式表示：[x, y, z, rx, ry, rz]，前 3 个是平移，后 3 个是旋转
+    tx_cam_tcp = pose_to_mat(pose_cam_tcp)    #把 6 维 pose，转成 4×4 齐次变换矩阵
         
     # SLAM map origin to table tag transform
     # NOTE: 这里为什么要求 SLAM map相对于tag的位姿呢？
+
+    #读取 tx_slam_tag.json 文件中的 4×4 变换矩阵 tx_slam_tag，然后求它的逆矩阵 tx_tag_slam，供后面做坐标系转换使用。
     if tx_slam_tag is None:
         path = demos_dir.joinpath('mapping', 'tx_slam_tag.json')
         assert path.is_file()
@@ -133,6 +170,24 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # load gripper calibration
     gripper_id_gripper_cal_map = dict()
     cam_serial_gripper_cal_map = dict()
+    """
+    gripper_id_gripper_cal_map,键是 gripper_id，值是这个 gripper 的标定插值函数。
+
+例如：
+
+{
+    0: <某个插值函数>,
+    1: <某个插值函数>
+}
+    cam_serial_gripper_cal_map,键是相机序列号 cam_serial，值是该相机对应的 gripper 标定插值函数。
+
+例如：
+
+{
+    "C34413281": <某个插值函数>,
+    "C34413282": <某个插值函数>
+}  
+    """
 
     with ExifToolHelper() as et:
         for gripper_cal_path in demos_dir.glob("gripper*/gripper_range.json"):
@@ -148,27 +203,45 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 'aruco_measured_width': [min_width, max_width],
                 'aruco_actual_width': [min_width, max_width]
             }
-            # gripper_cal_interp 是一个插值函数，输入检测到的marker的距离，输出对应的gripper_width
+            # 给一个“测得的 gripper 宽度”，输出一个“校正后的 gripper 宽度”
             gripper_cal_interp = get_gripper_calibration_interpolator(**gripper_cal_data)
             gripper_id_gripper_cal_map[gripper_id] = gripper_cal_interp
             cam_serial_gripper_cal_map[cam_serial] = gripper_cal_interp
 
-
+    
     # %% stage 1
     # loop over all demo directory to extract video metadata
     # output: video_meta_df
-    
+    """
+    遍历 demos/ 下所有普通 demo_*/raw_video.mp4 视频，筛掉不满足条件的视频，读取每个有效视频的元数据和时间信息，
+    最后整理成一个表 video_meta_df
+    """
     # find videos
     video_dirs = sorted([x.parent for x in demos_dir.glob('demo_*/raw_video.mp4')])
+    """
+    在 demos_dir 下面找所有匹配：demo_*/raw_video.mp4的文件,比如可能找到：
+    demos/demo_C34413281_xxx/raw_video.mp4
+    demos/demo_C34413282_xxx/raw_video.mp4
+    demos/demo_C34413283_xxx/raw_video.mp4
+    """
+    """
+    x.parent 取这些文件的父目录，所以得到的是：
+    demos/demo_C34413281_xxx
+    demos/demo_C34413282_xxx
+    demos/demo_C34413283_xxx
+    """
 
     # ignore camera
     ignore_cam_serials = set()
     if ignore_cameras is not None:
         serials = ignore_cameras.split(',')
         ignore_cam_serials = set(serials)
-    
-    fps = None
-    rows = list()
+    """
+    默认不忽略任何相机，先建一个空集合,如果用户传了 --ignore_cameras,比如：C12345,C67890
+    就按逗号拆开，得到一个集合：{"C12345", "C67890"},后面如果某个视频的相机序列号在这个集合里，就会被跳过
+    """
+    fps = None  #用来记录视频帧率。后面它要求所有有效视频的 fps 一致
+    rows = list()  #用来收集每个有效视频的元数据信息，最后会把它们组成一个 DataFrame 表格 video_meta_df
     with ExifToolHelper() as et:    # ExifToolHelper是用于读取媒体文件的元数据
         for video_dir in video_dirs:            
             mp4_path = video_dir.joinpath('raw_video.mp4')
@@ -229,10 +302,13 @@ def main(input, output, tcp_offset, tx_slam_tag,
     #     "end_timestamp": float
     # }
     # map serial to count
+    """
+    根据每个视频的开始时间和结束时间，把多个相机的视频自动配对成同一个 demo，并找出“所有相机同时都在录制”的公共时间区间
+    """
     serial_count = video_meta_df['camera_serial'].value_counts()
     print("Found following cameras:")
     print(serial_count)
-    n_cameras = len(serial_count)
+    n_cameras = len(serial_count)   #len(on_cameras) == 1单个相机，len(on_cameras) == 2 双相机
     
     events = list()
     for vid_idx, row in video_meta_df.iterrows():
@@ -249,6 +325,20 @@ def main(input, output, tcp_offset, tx_slam_tag,
             'is_start': False
         })
     events = sorted(events, key=lambda x: x['t'])
+    """
+    每个视频都变成两个“事件”：
+    开始事件
+    结束事件
+    
+    例如视频 0：
+    属于相机 A
+    开始时间 10
+    结束时间 20
+
+    那么就会变成两个事件：
+    {'vid_idx': 0, 'camera_serial': 'A', 't': 10, 'is_start': True}
+    {'vid_idx': 0, 'camera_serial': 'A', 't': 20, 'is_start': False}
+    """
 
     # 主要针对2个gripper的情况，识别出一个demo中，所有camera同时录制的区段
     # （即最晚start的camera到最早end的camera的时间段
@@ -284,12 +374,19 @@ def main(input, output, tcp_offset, tx_slam_tag,
             demo_vid_idxs.add(event['vid_idx'])
             used_videos.update(demo_vid_idxs)
             
+             
             # demo_data_list每一行数据表示一个demo的所有视频的（1.视频索引，2.开始帧，3.结束帧）
             demo_data_list.append({
-                "video_idxs": sorted(demo_vid_idxs),    # 一个demo的所有视频索引，这里的demo是指完成一次manipulation，所有相机记录的video
+                "video_idxs": sorted(demo_vid_idxs), # 一个demo的所有视频索引，这里的demo是指完成一次manipulation，所有相机记录的video
                 "start_timestamp": t_start,
                 "end_timestamp": t_end
             })
+            """
+            demo_data_list = [
+            {"video_idxs": [0], "start_timestamp": 10, "end_timestamp": 20},
+            {"video_idxs": [1], "start_timestamp": 30, "end_timestamp": 40}
+            ]    
+            """
             t_demo_start = None
     unused_videos = set(video_meta_df.index) - used_videos
     for vid_idx in unused_videos:
@@ -300,6 +397,17 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # output: 
     # add video_meta_df['gripper_hardware_id'] column
     # cam_serial_gripper_hardware_id_map Dict[str, int]
+    """
+    
+    根据每个视频里的 ArUco tag 检测结果，判断这个视频对应的是哪一个 gripper（硬件夹爪），
+    然后把“视频 → gripper_id”以及“相机序列号 → gripper_id”的对应关系建立起来
+    
+    1、读取每个视频的 tag_detection.pkl
+    2、统计每个 tag 在视频中出现的频率
+    3、根据固定 tag 编号规则，把视频归属到某个 gripper
+    4、给每个视频添加 gripper_hardware_id
+    5、再按相机序列号汇总，给每台相机分配一个最终 gripper 身
+    """
     finger_tag_det_th = 0.8
     vid_idx_gripper_hardware_id_map = dict()
     cam_serial_gripper_ids_map = collections.defaultdict(list)
@@ -375,9 +483,14 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # output
     # cam_serial_cam_idx_map Dict[str,int]
     # video_meta_df add column "camera_idx" and "camera_idx_from_episode"
-    
+    """"
+    给所有相机分配统一的 camera_idx 编号，尤其是要自动判断多个 gripper 相机里谁是右手、谁是左手。最终约定是：
+    右 gripper 相机 = 0
+    左 gripper 相机 = 1
+    非 gripper 相机 = 2, 3, 4, 
+    """
     n_gripper_cams = (np.array(list(
-        cam_serial_gripper_hardware_id_map.values())    # cam_serial_gripper_hardware_id_map中values>0的是gripper_camera
+        cam_serial_gripper_hardware_id_map.values())
         ) >= 0).sum()
     
     if n_gripper_cams <= 0:
@@ -397,13 +510,13 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # 这一步只是给非抓手相机分配一个编号（可能存在不固定在gripper上，只拍摄视频的相机）
     cam_serial_cam_idx_map = dict()
     for i, cs in enumerate(sorted(other_cam_serials)):
-        cam_serial_cam_idx_map[cs] = len(grip_cam_serials) + i  # len(grip_cam_serials)是grip-cam的数量
+        cam_serial_cam_idx_map[cs] = len(grip_cam_serials) + i
 
     # disambiguiate gripper left/right at each demo episode
     cam_serial_right_to_left_idx_map = collections.defaultdict(list)
-    # len(video_meta_df)是表格的行数，即一个demo中所有视频的数量：num_demo*num_gripper
+ # len(video_meta_df)是表格的行数，即一个demo中所有视频的数量：num_demo*num_gripper
     vid_idx_cam_idx_map = np.full(len(video_meta_df), fill_value=-1, dtype=np.int32)
-    for demo_idx, demo_data in enumerate(demo_data_list):   # len(demo_data_list)=num_demo
+    for demo_idx, demo_data in enumerate(demo_data_list):
         video_idxs = demo_data['video_idxs']
         start_timestamp = demo_data['start_timestamp']
         end_timestamp = demo_data['end_timestamp']
@@ -419,7 +532,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 # not gripper camera
                 cam_serial = row['camera_serial']
                 if cam_serial in cam_serial_cam_idx_map:
-                    # 为每个video分配一个虚拟的gripper_index
+                     # 为每个video分配一个虚拟的gripper_index
                     vid_idx_cam_idx_map[vid_idx] = cam_serial_cam_idx_map[cam_serial]
                 continue
             
@@ -438,7 +551,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 # drop episode if too many lost frames
                 # unreliable tracking
                 break
-            
+
             # 视频帧数不够也不行
             if (~csv_df['is_lost']).sum() < 60:
                 break
@@ -475,7 +588,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
             for j in range(len(pose_samples)):
                 # 0 if i == j
                 # keep this for single gripper case
-                # right相机的x_proj_avg是负数，左相机的x_proj_avg是正数
+                 # right相机的x_proj_avg是负数，左相机的x_proj_avg是正数
                 this_proj_avg.append(np.mean(get_x_projection(
                     tx_tag_this=pose_samples[i], 
                     tx_tag_other=pose_samples[j])))
@@ -496,8 +609,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
     # assign most common cam index to each gripper camera
     for cs, cis in cam_serial_right_to_left_idx_map.items():
         count = collections.Counter(cis)
-        this_cam_idx = count.most_common(1)[0][0]   # 选择出现频次最高的那个
-        # 在line：394，只对other_camera_serial的id进行了赋值
+        this_cam_idx = count.most_common(1)[0][0]
         cam_serial_cam_idx_map[cs] = this_cam_idx
 
     # create columns
@@ -538,6 +650,12 @@ def main(input, output, tcp_offset, tx_slam_tag,
     #         "video_start_end": Tuple[int,int]
     #     }]
     # }]
+
+    """
+    把每个 demo 中多相机、多 gripper 的原始结果，做时间对齐、有效性筛选、TCP 轨迹提取、夹爪状态提取，再切成若干连续有效的 episode，
+    最后写成 all_plans 并保存为 dataset_plan.pkl
+    
+    """
     total_avaliable_time = 0.0
     total_used_time = 0.0
     dropped_camera_count = collections.defaultdict(lambda: 0)
@@ -592,9 +710,9 @@ def main(input, output, tcp_offset, tx_slam_tag,
         cam_start_frame_idxs = list()
         n_frames = int((end_timestamp - start_timestamp) / dt)
         for cam_idx, row in demo_video_meta_df.iterrows():
-            video_start_frame = math.ceil((start_timestamp - row['start_timestamp']) / dt)  # 向上取整
-            video_n_frames = math.floor((row['end_timestamp'] - start_timestamp) / dt) - 1  # 向下取整
-            # 通常来说，video_start_frame >= 0,
+            video_start_frame = math.ceil((start_timestamp - row['start_timestamp']) / dt) # 向上取整
+            video_n_frames = math.floor((row['end_timestamp'] - start_timestamp) / dt) - 1 # 向下取整
+              # 通常来说，video_start_frame >= 0,
             if video_start_frame < 0:
                 video_n_frames += video_start_frame
                 video_start_frame = 0
@@ -606,11 +724,13 @@ def main(input, output, tcp_offset, tx_slam_tag,
         # load pose and gripper data for each video
         # determin valid frames for each video
         all_cam_poses = list()
-        all_gripper_widths = list()
+
+        all_gripper_values = list()
+
         all_is_valid = list()
-        
+
         # 这时demo_video_meta_df按照camera_idx索引来排序
-        # 0--right gripper camera，1--left gripper camera，>1--other cameras
+        # 0--right gripper camera，1--left gripper camera，>1--other cameras    
         for cam_idx, row in demo_video_meta_df.iterrows():
             if cam_idx >= n_gripper_cams:
                 # not gripper camera
@@ -652,7 +772,7 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 continue
             
             # load camera pose
-            df.loc[df['is_lost'], 'q_w'] = 1    # 将‘is_lost’为True的帧的q_w设为1
+            df.loc[df['is_lost'], 'q_w'] = 1  # 将‘is_lost’为True的帧的q_w设为1
             cam_pos = df[['x', 'y', 'z']].to_numpy()
             cam_rot_quat_xyzw = df[['q_x', 'q_y', 'q_z', 'q_w']].to_numpy()
             cam_rot = Rotation.from_quat(cam_rot_quat_xyzw)
@@ -686,58 +806,43 @@ def main(input, output, tcp_offset, tx_slam_tag,
                 continue
 
             # get gripper action
+            # get gripper binary labels
             ghi = row['gripper_hardware_id']
             if ghi < 0:
                 print(f"Skipping {video_dir.name}, invalid gripper hardware id {ghi}")
                 dropped_camera_count[row['camera_serial']] += 1
                 continue
-            
-            # 获取gripper的left/right tag id
-            left_id = 6 * ghi
-            right_id = left_id + 1
 
-            # 获取每一个gripper的calibration
-            gripper_cal_interp = None
-            if ghi in gripper_id_gripper_cal_map:
-                gripper_cal_interp = gripper_id_gripper_cal_map[ghi]
-            elif row['camera_serial'] in cam_serial_gripper_cal_map:
-                gripper_cal_interp = cam_serial_gripper_cal_map[row['camera_serial']]
-                print(f"Gripper id {ghi} not found in gripper calibrations {list(gripper_id_gripper_cal_map.keys())}. Falling back to camera serial map.")
-            else:
-                raise RuntimeError("Gripper calibration not found.")
+            label_npy_path = video_dir.joinpath('gripper_binary_labels.npy')
+            if not label_npy_path.is_file():
+                print(f"Skipping {video_dir.name}, no gripper_binary_labels.npy.")
+                dropped_camera_count[row['camera_serial']] += 1
+                continue
 
-            gripper_timestamps = list()
-            gripper_widths = list()
-            for td in tag_detection_results:
-                # 获取当前frame检测到的tag width
-                width = get_gripper_width(td['tag_dict'], 
-                    left_id=left_id, right_id=right_id, 
-                    nominal_z=nominal_z)
-                if width is not None:
-                    gripper_timestamps.append(td['time'])
-                    # 将tag width 映射为gripper width（即，将current_tag_width-min_tag_width）
-                    # 这个通过插值函数gripper_cal_interp来实现，见line：152
-                    gripper_widths.append(gripper_cal_interp(width))
-            gripper_interp = get_interp1d(gripper_timestamps, gripper_widths)
-            
-            gripper_det_ratio = (len(gripper_widths) / len(tag_detection_results))
-            if gripper_det_ratio < 0.9:
-                print(f"Warining: {video_dir.name} only {gripper_det_ratio} of gripper tags detected.")
+            all_labels = np.load(label_npy_path)
+           #  print(f"Using binary gripper labels: {label_npy_path}")
 
-            # 获取按照video_timestamps插值后的gripper宽度，这是一个width的序列
-            # 这是为了防止某些frame没有检测到tag，导致没有width
-            this_gripper_widths = gripper_interp(video_timestamps)
-            
+            if len(all_labels) < (start_frame_idx + n_frames):
+                print(
+                    f"Skipping {video_dir.name}, gripper_binary_labels.npy too short: "
+                    f"{len(all_labels)} < {start_frame_idx + n_frames}"
+                )
+                dropped_camera_count[row['camera_serial']] += 1
+                continue
+
+            this_gripper_value = all_labels[start_frame_idx:start_frame_idx+n_frames].astype(np.float32)
+
+
             # transform to tcp frame
             tx_tag_tcp = tx_tag_cam @ tx_cam_tcp
             pose_tag_tcp = mat_to_pose(tx_tag_tcp)
             
             # output value
             assert len(pose_tag_tcp) == n_frames
-            assert len(this_gripper_widths) == n_frames
+            assert len(this_gripper_value) == n_frames
             assert len(is_step_valid) == n_frames
             all_cam_poses.append(pose_tag_tcp)
-            all_gripper_widths.append(this_gripper_widths)
+            all_gripper_values.append(this_gripper_value)
             all_is_valid.append(is_step_valid)
 
         if len(all_cam_poses) != n_gripper_cams:
@@ -787,19 +892,29 @@ def main(input, output, tcp_offset, tx_slam_tag,
                     pose_tag_tcp = all_cam_poses[cam_idx][start:end]
                     
                     # gripper cam
+                    # grippers.append({
+                    #     "tcp_pose": pose_tag_tcp,
+                    #     "gripper_width": all_gripper_values[cam_idx][start:end],
+                    #     "demo_start_pose": demo_start_poses[cam_idx],
+                    #     "demo_end_pose": demo_end_poses[cam_idx]
+                    # })
+
+
                     grippers.append({
-                        "tcp_pose": pose_tag_tcp,   # 参考line 729: tx_tag_tcp = tx_tag_cam @ tx_cam_tcp
-                        "gripper_width": all_gripper_widths[cam_idx][start:end],
+                        "tcp_pose": pose_tag_tcp,
+                        "gripper_binary": all_gripper_values[cam_idx][start:end],
                         "demo_start_pose": demo_start_poses[cam_idx],
                         "demo_end_pose": demo_end_poses[cam_idx]
-                    })
+                        })
+                    
+
                 # all cams
                 video_dir = row['video_dir']
                 vid_start_frame = cam_start_frame_idxs[cam_idx]
                 cameras.append({
                     "video_path": str(video_dir.joinpath('raw_video.mp4').relative_to(video_dir.parent)),
-                    # 这个应该只是告诉该视频的对齐后的起止帧
-                    # 可以查看634行，已经用vid_start_frame对camera_trajectory进行了对齐
+                     # 这个应该只是告诉该视频的对齐后的起止帧
+                    # 可以查看    行，已经用vid_start_frame对camera_trajectory进行了对齐
                     "video_start_end": (start+vid_start_frame, end+vid_start_frame)
                 })
             

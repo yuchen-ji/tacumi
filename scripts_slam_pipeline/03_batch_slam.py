@@ -1,5 +1,14 @@
 """
-python scripts_slam_pipeline/03_batch_slam.py -i data_workspace/fold_cloth_20231214/demos
+python scripts_slam_pipeline/03_batch_slam.py -i session_dir1/demos
+"""
+"""
+拿已经建好的地图 map_atlas.osa，对 demos/ 下面的一批视频逐个跑 SLAM 定位，输出每个视频自己的相机轨迹 camera_trajectory.csv
+
+
+输入：视频 + IMU + 已有地图
+输出：轨迹
+本质上是在已有地图上定位
+
 """
 # %%
 import sys
@@ -17,13 +26,13 @@ import multiprocessing
 import concurrent.futures
 from tqdm import tqdm
 import cv2
-import av
+import av    #读取视频时长
 import numpy as np
 from umi.common.cv_util import draw_predefined_mask
 
 
 # %%
-def runner(cmd, cwd, stdout_path, stderr_path, timeout, **kwargs):
+def runner(cmd, cwd, stdout_path, stderr_path, timeout, **kwargs):#带日志保存和超时控制的 Docker 命令执行器
     try:
         return subprocess.run(cmd,                       
             cwd=str(cwd),
@@ -46,12 +55,12 @@ def runner(cmd, cwd, stdout_path, stderr_path, timeout, **kwargs):
 @click.option('-np', '--no_docker_pull', is_flag=True, default=False, help="pull docker image from docker hub")
 def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeout_multiple, no_docker_pull):
     input_dir = pathlib.Path(os.path.expanduser(input_dir)).absolute()
-    input_video_dirs = [x.parent for x in input_dir.glob('demo*/raw_video.mp4')]
-    input_video_dirs += [x.parent for x in input_dir.glob('map*/raw_video.mp4')]
+    input_video_dirs = [x.parent for x in input_dir.glob('demo*/raw_video.mp4')]#demos/demo_xxx/raw_video.mp4
+    input_video_dirs += [x.parent for x in input_dir.glob('map*/raw_video.mp4')]#mapping/raw_video.mp4
     print(f'Found {len(input_video_dirs)} video dirs')
     
     if map_path is None:
-        map_path = input_dir.joinpath('mapping', 'map_atlas.osa')
+        map_path = input_dir.joinpath('mapping', 'map_atlas.osa')  #如果没传 --map_path，就默认认为地图在,demos/mapping/map_atlas.osa
     else:
         map_path = pathlib.Path(os.path.expanduser(map_path)).absolute()
     assert map_path.is_file()
@@ -76,6 +85,11 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
         # one chunk per thread, therefore no synchronization needed
         with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = set()
+            """
+            一个总进度条
+            一个线程池
+            一个 futures 集合来保存尚未完成的任务
+            """
             for video_dir in tqdm(input_video_dirs):
                 video_dir = video_dir.absolute()
                 if video_dir.joinpath('camera_trajectory.csv').is_file():
@@ -98,7 +112,8 @@ def main(input_dir, map_path, docker_image, num_workers, max_lost_frames, timeou
                 
                 slam_mask = np.zeros((2028, 2704), dtype=np.uint8)
                 slam_mask = draw_predefined_mask(
-                    slam_mask, color=255, mirror=True, gripper=False, finger=True)
+                    #slam_mask, color=255, mirror=True, gripper=False, finger=True)      #保留镜子的版本
+                    slam_mask, color=255, mirror=False, gripper=False, finger=True)      #去掉镜子，保留夹爪的版本
                 cv2.imwrite(str(mask_write_path.absolute()), slam_mask)
 
                 map_mount_source = map_path

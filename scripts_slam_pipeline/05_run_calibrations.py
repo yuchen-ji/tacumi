@@ -1,5 +1,44 @@
 """
-python scripts_slam_pipeline/05_run_calibrations.py data_workspace/cup_in_the_wild/20240105_zhenjia_packard_2nd_conference_room
+python scripts_slam_pipeline/05_run_calibrations.py session_dir1 session_dir2 ...
+"""
+
+"""
+它不是再去处理视频本身，而是利用前面步骤已经得到的轨迹和 ArUco 检测结果，去做两类标定（calibration）：
+(1)SLAM 坐标系和 tag 坐标系之间的标定
+(2)gripper 工作范围的标定
+
+拿前面得到的轨迹 CSV 和 tag_detection.pkl，再进一步算出一些标定结果 JSON。
+"""
+
+"""
+为什么要做 slam-tag 标定
+
+因为：
+
+SLAM 给你的是一个SLAM 自己内部的地图坐标系
+ArUco tag 检测给你的是一个相对于 tag 的坐标参考
+
+这两个坐标系天然不是同一个。
+
+所以必须通过标定求出一个变换，让系统知道：
+
+“SLAM 坐标系里的点，怎么转换到 tag 坐标系里去”
+"""
+
+""""
+第一步：做 slam-tag 标定,使用：
+
+demos/mapping/tag_detection.pkl
+demos/mapping/camera_trajectory.csv
+或 mapping_camera_trajectory.csv
+
+生成：demos/mapping/tx_slam_tag.json
+
+第二步：做 gripper range 标定
+
+对每个：demos/gripper_calibration*目录，使用：tag_detection.pkl
+
+生成：gripper_range.json
 """
 # %%
 import sys
@@ -46,11 +85,10 @@ def main(session_dir):
         ]
         subprocess.run(cmd)
         
-        # run gripper range calibration
+        # 个人理解，可能对于使用两个gripper操作的需要分别标定
         script_path = script_dir.joinpath('calibrate_gripper_range.py')
         assert script_path.is_file()
-        
-        # 个人理解，可能对于使用两个gripper操作的需要分别标定
+
         for gripper_dir in demos_dir.glob("gripper_calibration*"):
             gripper_range_path = gripper_dir.joinpath('gripper_range.json')
             tag_path = gripper_dir.joinpath('tag_detection.pkl')

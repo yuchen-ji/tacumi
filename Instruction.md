@@ -167,6 +167,14 @@ TactileAutoencoderDataset 数据集类，pretrain_mae.py 依赖此文件
 把机器人采集到的原始多模态观测数据（RGB图像 + 触觉 + 低维状态），统一压缩编码成一个特征向量，供后面的 UNet 扩散策略使用。
 这里完全照搬自touch in the wild
 
+8. diffusion_policy/policy/diffusion_unet_timm_policy.py
+模型训练的关于夹爪宽度的输出应该还是连续值，这里再进行二值化，大于0的输出为张开（1），小于等于0的输出为闭合（-1）
+action_pred[..., -1] = torch.where(action_pred[..., -1] > 0, 1.0, -1.0)
+
+9. 添加代码/scripts_slam_pipeline/05_5_generate_gripper_binary_labels.py
+用于对夹爪宽度进行2分类，其中张开为1，闭合为-1
+
+
 
 
 
