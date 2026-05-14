@@ -284,7 +284,8 @@ class BimanualUmiEnv:
         #   - teleop 路径：action 通道是真实宽度 [0, 0.09]，0~0.045 -> close，0.045~0.09 -> open
         self.gripper_open_width = 0.09
         self.gripper_close_width = 0.0
-        self.gripper_state_threshold = 0.5 * self.gripper_open_width
+        # self.gripper_state_threshold = 0.5 * self.gripper_open_width
+        self.gripper_state_threshold = 0
         # 最近一次下发的离散开合状态（-1 关 / 1 开），初始假设夹具处于打开状态。
         # 用于"状态变化才下发"以及 obs（robot{i}_gripper_width）的离散值。
         self._last_gripper_state = [1] * len(self.grippers)

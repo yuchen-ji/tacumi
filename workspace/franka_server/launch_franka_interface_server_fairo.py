@@ -56,8 +56,9 @@ class FrankaInterface:
 
     def get_state(self):
         state_ = self.gripper.get_state()
+        # print(state_)
         state = dict()
-        state['timestamp'] = state_.timestamp.seconds + state_.timestamp.nanoseconds * 1e-9
+        state['timestamp'] = state_.timestamp.seconds + state_.timestamp.nanos * 1e-9
         state['width'] = state_.width
         state['is_moving'] = state_.is_moving
         state['is_grasped'] = state_.is_grasped

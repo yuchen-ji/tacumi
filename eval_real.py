@@ -1,6 +1,6 @@
 """
 Usage:
-(umi): python scripts_real/eval_real_umi.py -i data/outputs/2023.10.26/02.25.30_train_diffusion_unet_timm_umi/checkpoints/latest.ckpt -o data_local/cup_test_data
+(umi): python scripts_real/eval_real_umi.py -rc example/eval_robots_config.yaml -i data/plugin/latest.ckpt -o data_local/cup_test_data
 
 ================ Human in control ==============
 Robot movement:
@@ -132,7 +132,6 @@ def main(input, output, robot_config,
     frequency, command_latency, 
     no_mirror, sim_fov, camera_intrinsics, mirror_swap):
     max_gripper_width = 0.09
-    gripper_speed = 0.2
     
     # load robot config file
     robot_config_data = yaml.safe_load(open(os.path.expanduser(robot_config), 'r'))
@@ -403,14 +402,14 @@ def main(input, output, robot_config,
                         target_pose[robot_idx, 3:] = (drot * st.Rotation.from_rotvec(
                             target_pose[robot_idx, 3:])).as_rotvec()
 
-                    dpos = 0
                     if sm.is_button_pressed(0):
-                        # close gripper
-                        dpos = -gripper_speed / frequency
+                        # close gripper immediately
+                        for robot_idx in control_robot_idx_list:
+                            gripper_target_pos[robot_idx] = -1.0
                     if sm.is_button_pressed(1):
-                        dpos = gripper_speed / frequency
-                    for robot_idx in control_robot_idx_list:
-                        gripper_target_pos[robot_idx] = np.clip(gripper_target_pos[robot_idx] + dpos, 0, max_gripper_width)
+                        # open gripper immediately
+                        for robot_idx in control_robot_idx_list:
+                            gripper_target_pos[robot_idx] = 1.0
 
                     # solve collision with table
                     for robot_idx in control_robot_idx_list:
