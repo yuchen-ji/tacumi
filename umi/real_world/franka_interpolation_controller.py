@@ -43,6 +43,9 @@ tx_flange_tip = np.identity(4)
 # TODO: 这里为什么会是+45度呢？
 tx_flange_tip[:3, :3] = st.Rotation.from_euler('z', [np.pi/4]).as_matrix()
 tx_flange_tip[:3, 3] = np.array([0, 0, 0.2045])
+# tx_flange_tip[:3, 3] = np.array([0, 0, 0.1645])
+# tx_flange_tip[:3, 3] = np.array([0, 0, 0.3045])
+
 tx_tip_flange = np.linalg.inv(tx_flange_tip)
 
 
@@ -320,6 +323,9 @@ class FrankaInterpolationController(mp.Process):
                 state['robot_receive_timestamp'] = t_recv
                 state['robot_timestamp'] = t_recv - self.receive_latency
                 self.ring_buffer.put(state)
+
+                # ActualTCPPose, ActualQ, ActualQd, robot_receive_timestamp, robot_timestamp
+                # print(len(self.ring_buffer.get_all()['ActualTCPPose']))
 
                 # fetch command from queue
                 try:

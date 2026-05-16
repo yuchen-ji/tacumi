@@ -282,7 +282,11 @@ def main(input, output, robot_config,
 
                 # TODO： 这里获取/控制夹爪的指令要不要改变呢？
                 gripper_states = env.get_gripper_state()
-                gripper_target_pos = np.asarray([gs['gripper_position'] for gs in gripper_states])
+                # gripper_target_pos = np.asarray([gs['gripper_position'] for gs in gripper_states])
+                gripper_target_pos = np.asarray([
+                    1.0 if gs['gripper_position'] > 0.045 else -1.0
+                    for gs in gripper_states
+                ])
                 
                 control_robot_idx_list = [0]
 

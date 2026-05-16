@@ -3,7 +3,7 @@
 ## 1 推理
 ```bash
 conda activate umi
-python scripts_real/eval_real_umi.py -rc example/eval_robots_config.yaml -i data/plugin/latest.ckpt -o data_local/cup_test_data
+python eval_real.py -rc example/eval_robots_config.yaml -i data/plugin/latest.ckpt -o data_local/cup_test_data
 ```
 
 

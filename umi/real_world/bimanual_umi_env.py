@@ -283,7 +283,7 @@ class BimanualUmiEnv:
         #   - policy 路径：action 通道是 -1/1，与 0.045 比较得到正确的 open/close
         #   - teleop 路径：action 通道是真实宽度 [0, 0.09]，0~0.045 -> close，0.045~0.09 -> open
         self.gripper_open_width = 0.09
-        self.gripper_close_width = 0.0
+        self.gripper_close_width = 0.015
         # self.gripper_state_threshold = 0.5 * self.gripper_open_width
         self.gripper_state_threshold = 0
         # 最近一次下发的离散开合状态（-1 关 / 1 开），初始假设夹具处于打开状态。
@@ -585,9 +585,11 @@ class BimanualUmiEnv:
                 ###    g_actions 既可能是 -1/1（policy 路径）也可能是 [0, 0.09]（teleop 路径），
                 ###    用统一的中点阈值 gripper_state_threshold 处理。
                 ### =============================================================================
-                g_target_time = new_timestamps[i] - g_latency
+                margin = 0.0 # 0.0 秒，用于补偿延时，防止指令已经超时
+                g_target_time = new_timestamps[i] - g_latency + margin
                 desired_state = 1 if g_actions > self.gripper_state_threshold else -1
                 last_state = self._last_gripper_state[robot_idx]
+                # print(f'last_state: {last_state}, desired_state: {desired_state}')
 
                 if last_state == desired_state:
                     # 同一状态不重复下发，避免刷爆 FrankaHandController
@@ -596,6 +598,7 @@ class BimanualUmiEnv:
                 target_width = (
                     self.gripper_open_width if desired_state == 1 else self.gripper_close_width
                 )
+                print(f'target_width: {target_width}')
                 gripper.schedule_waypoint(
                     pos=target_width,
                     target_time=g_target_time,

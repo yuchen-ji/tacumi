@@ -29,8 +29,8 @@ class FrankaHandController(mp.Process):
         shm_manager: SharedMemoryManager,
         hostname: str,
         port: int = 4242,
-        # frequency: float = 30.0,
-        frequency: float = 3.0,  # 使用3HZ的频率控制夹爪
+        frequency: float = 30.0,
+        # frequency: float = 3.0,  # 使用3HZ的频率控制夹爪
         home_on_start: bool = True,
         move_max_speed: float = 0.2, # m/s
         move_force: float = 1.0,    # TODO: force参数对franka hand的移动速度有什么影响呢
@@ -191,7 +191,8 @@ class FrankaHandController(mp.Process):
 
                     # TODO: 如果夹具不懂，可以修改这里的speed，一般改成0.2就比较好了
                     # 真机实验表明，直接给定夹爪速度（更快的速度）效果比插值的更好，感觉是因为夹爪控制延迟的原因，通过更快的速度来抵消控制延迟的影响
-                    speed = 0.5
+                    speed = 0.2
+                    # print(f'speed: {speed}')
                     gripper.goto(
                         width=target_pos * self.scale,
                         speed=speed,
